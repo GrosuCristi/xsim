@@ -1,0 +1,25 @@
+* xsim reference: current switch hysteresis in a DC sweep, exactly at the thresholds
+* I1 pushes the swept current through the 0 V source VS, which controls W1.
+* It = 2^-10 A and Ih = 2^-12 A make the thresholds It + Ih = 0.001220703125 A
+* and It - Ih = 0.000732421875 A exact binary numbers, and the sweep points
+* k*2^-14 A land on them. Rising (this deck), V(o) = 4.995004995005 (off) up to
+* and including point 20 (It + Ih) and 0.0495049504950495 (on) from point 21.
+* Falling (.dc I1 0.001953125 0 -6.103515625e-5), on down to and including
+* point 12 (It - Ih) and off from point 11.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+I1 0 c 0
+VS c 0 0
+V1 a 0 5
+R1 a o 1k
+W1 o 0 VS SWM
+.model SWM CSW(Ron=10 Roff=1e6 It=0.0009765625 Ih=0.000244140625)
+.options numdgt=15 measdgt=15
+.dc I1 0 0.001953125 6.103515625e-5
+.meas DC v0 FIND V(o) AT=0.0
+.meas DC v11 FIND V(o) AT=0.00067138671875
+.meas DC v12 FIND V(o) AT=0.000732421875
+.meas DC v16 FIND V(o) AT=0.0009765625
+.meas DC v20 FIND V(o) AT=0.001220703125
+.meas DC v21 FIND V(o) AT=0.00128173828125
+.meas DC v32 FIND V(o) AT=0.001953125
+.end

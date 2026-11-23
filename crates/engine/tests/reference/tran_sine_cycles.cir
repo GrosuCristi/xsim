@@ -1,0 +1,14 @@
+* xsim reference: SINE with a cycle count holds its final value (T7)
+V1 s 0 SINE(0.5 2 50 10m 30 30 2)
+R1 s 0 1k
+V2 f 0 SINE(0 1 1k 0 0 0 2.25)
+R2 f 0 1k
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 70m 0 0.2u
+.meas TRAN s23 FIND V(s) AT=23m
+.meas TRAN s49 FIND V(s) AT=49m
+.meas TRAN s55 FIND V(s) AT=55m
+.meas TRAN s60 FIND V(s) AT=60m
+.meas TRAN f3 FIND V(f) AT=3m
+.meas TRAN f10 FIND V(f) AT=10m
+.end

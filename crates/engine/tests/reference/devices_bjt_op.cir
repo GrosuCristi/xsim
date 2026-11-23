@@ -1,0 +1,74 @@
+* xsim reference: NPN_GP / PNP_GP common-emitter stages and the QN_EXT / QP_EXT test transistors, operating point
+* NPN_GP and PNP_GP are the xsim library entries of the same name: generic
+* models authored for xsim (D13, see crates/engine/src/library.rs).
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+* The two-point .dc sweep only exists so .meas can read the VCC = 12 V point.
+VCC vcc 0 12
+R1 vcc b 47k
+R2 b 0 10k
+RC vcc c 2.2k
+RE e 0 1k
+CE e 0 100u
+Cin in b 10u
+Vin in 0 0 AC 1
+Q1 c b e NPN_GP
+RE2 vcc e2 1k
+R3 vcc b2 10k
+R4 b2 0 47k
+RC2 c2 0 2.2k
+Q2 c2 b2 e2 PNP_GP
+R5 vcc b3 47k
+R6 b3 0 10k
+RC3 vcc c3 2.2k
+RE3 e3 0 1k
+CE3 e3 0 100u
+Cin3 in b3 10u
+Q3 c3 b3 e3 QN_EXT
+RE4 vcc e4 1k
+CE4 e4 vcc 100u
+R7 vcc b4 10k
+R8 b4 0 47k
+RC4 c4 0 2.2k
+Cin4 in b4 10u
+Q4 c4 b4 e4 QP_EXT
+.model NPN_GP NPN (IS=1.2e-14 BF=210 NF=1 VAF=100 IKF=0.082 ISE=2.5e-14 NE=1.5 BR=5 NR=1 ISC=0 NC=2 RB=40 RBM=40 RE=0.5 RC=2 CJE=10p VJE=0.75 MJE=0.33 CJC=4p VJC=0.75 MJC=0.33 XCJC=1 CJS=0 VJS=0.75 MJS=0 TF=580p XTF=0 ITF=0 PTF=0 TR=50n EG=1.11 XTB=1.5 XTI=3 FC=0.5 KF=0 AF=1)
+.model PNP_GP PNP (IS=1.2e-14 BF=190 NF=1 VAF=80 IKF=0.08 ISE=3.2e-14 NE=1.5 BR=4 NR=1 ISC=0 NC=2 RB=40 RBM=40 RE=0.5 RC=2 CJE=12p VJE=0.75 MJE=0.33 CJC=6p VJC=0.75 MJC=0.33 XCJC=1 CJS=0 VJS=0.75 MJS=0 TF=730p XTF=0 ITF=0 PTF=0 TR=60n EG=1.11 XTB=1.5 XTI=3 FC=0.5 KF=0 AF=1)
+* QN_EXT and QP_EXT are test transistors, not library parts: the NPN_GP and
+* PNP_GP parameters plus a current-dependent base resistance (IRB, RBM < RB),
+* a split B-C capacitance (XCJC < 1), non-ideal emission coefficients,
+* reverse Early and high-injection corners, B-C leakage and a bias-dependent
+* transit time (XTF, VTF, ITF).
+.model QN_EXT NPN (IS=1.2e-14 BF=210 NF=1.01 VAF=100 IKF=0.082 ISE=2.5e-14 NE=1.5 BR=5 NR=1.02 VAR=20 IKR=0.2 ISC=1e-13 NC=2 RB=60 IRB=100u RBM=8 RE=0.5 RC=2 CJE=10p VJE=0.75 MJE=0.33 CJC=4p VJC=0.75 MJC=0.33 XCJC=0.6 CJS=2p VJS=0.6 MJS=0.4 TF=580p XTF=2 VTF=10 ITF=50m PTF=0 TR=50n EG=1.11 XTB=1.5 XTI=3 FC=0.5 KF=0 AF=1)
+.model QP_EXT PNP (IS=1.2e-14 BF=190 NF=1.01 VAF=80 IKF=0.08 ISE=3.2e-14 NE=1.5 BR=4 NR=1.02 VAR=15 IKR=0.15 ISC=1e-13 NC=2 RB=60 IRB=100u RBM=8 RE=0.5 RC=2 CJE=12p VJE=0.75 MJE=0.33 CJC=6p VJC=0.75 MJC=0.33 XCJC=0.7 CJS=0 VJS=0.75 MJS=0 TF=730p XTF=2 VTF=8 ITF=50m PTF=0 TR=60n EG=1.11 XTB=1.5 XTI=3 FC=0.5 KF=0 AF=1)
+.options plotwinsize=0 numdgt=15 gmin=1e-12 reltol=1e-9 abstol=1e-15 vntol=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.dc VCC 11 12 1
+.meas DC vb FIND V(b) AT=12
+.meas DC vc FIND V(c) AT=12
+.meas DC ve FIND V(e) AT=12
+.meas DC icq1 FIND Ic(Q1) AT=12
+.meas DC ibq1 FIND Ib(Q1) AT=12
+.meas DC ieq1 FIND Ie(Q1) AT=12
+.meas DC vb2 FIND V(b2) AT=12
+.meas DC vc2 FIND V(c2) AT=12
+.meas DC ve2 FIND V(e2) AT=12
+.meas DC icq2 FIND Ic(Q2) AT=12
+.meas DC ibq2 FIND Ib(Q2) AT=12
+.meas DC ieq2 FIND Ie(Q2) AT=12
+.meas DC vb3 FIND V(b3) AT=12
+.meas DC vc3 FIND V(c3) AT=12
+.meas DC ve3 FIND V(e3) AT=12
+.meas DC icq3 FIND Ic(Q3) AT=12
+.meas DC ibq3 FIND Ib(Q3) AT=12
+.meas DC ieq3 FIND Ie(Q3) AT=12
+.meas DC vb4 FIND V(b4) AT=12
+.meas DC vc4 FIND V(c4) AT=12
+.meas DC ve4 FIND V(e4) AT=12
+.meas DC icq4 FIND Ic(Q4) AT=12
+.meas DC ibq4 FIND Ib(Q4) AT=12
+.meas DC ieq4 FIND Ie(Q4) AT=12
+.end

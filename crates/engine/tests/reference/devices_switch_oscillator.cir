@@ -1,0 +1,20 @@
+* xsim reference: relaxation oscillator, a hysteretic switch discharging its own control node (T1)
+* V(c) charges through R1 towards 5 V until the switch turns on above
+* Vt + Vh = 3 V, then discharges through Ron until it turns off below
+* Vt - Vh = 2 V. The circuit has no DC operating point, so the run starts
+* from rest (uic). Closed form with Roff: period 0.40587528 ms, first rise
+* through 2.5 V at 0.69315025 ms.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+VCC vcc 0 5
+R1 vcc c 10k
+C1 c 0 100n
+S1 c 0 c 0 SW1
+.model SW1 SW(Ron=10 Roff=1G Vt=2.5 Vh=0.5)
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 5m 0 0.1u uic
+.meas TRAN t1 WHEN V(c)=2.5 RISE=1
+.meas TRAN t2 WHEN V(c)=2.5 RISE=2
+.meas TRAN t7 WHEN V(c)=2.5 RISE=7
+.meas TRAN vmax MAX V(c) FROM=2m TO=5m
+.meas TRAN vmin MIN V(c) FROM=2m TO=5m
+.end

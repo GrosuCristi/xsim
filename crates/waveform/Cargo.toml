@@ -1,0 +1,19 @@
+[package]
+name = "xsim-waveform"
+description = "xsim waveform post-processing: trace expressions, measurements, level-of-detail decimation, axis ticks, CSV export."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+xsim-spice-engine.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

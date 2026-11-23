@@ -1,0 +1,16 @@
+* xsim reference: BJT with IS = 1e-38, a B-E junction exponent near 81 at IC = 1 mA (DCAC-2)
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+I1 0 b 10u
+VC c 0 3
+Q1 c b 0 QX
+.model QX NPN(IS=1e-38 BF=100)
+.options plotwinsize=0 numdgt=15 gmin=1e-12 reltol=1e-9 abstol=1e-15 vntol=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.op
+.meas op vb find V(b)
+.meas op ic find Ic(Q1)
+.end

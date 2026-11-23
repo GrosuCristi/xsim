@@ -1,0 +1,14 @@
+* xsim reference: transient of the capacitive divider from its operating
+* point (D15), tests/floating_nodes.rs. LTspice keeps its gmin leak in the
+* transient (2.5e-7 V at 1 ms); xsim ties the node for the operating point
+* only.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 PULSE(0 1 0 1u 1u 1 2)
+C1 a m 1n
+C2 m 0 1n
+R1 a 0 1k
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12
+.tran 0 1m 0 10u
+.meas TRAN vm0 FIND V(m) AT=0
+.meas TRAN vm1 FIND V(m) AT=1m
+.end

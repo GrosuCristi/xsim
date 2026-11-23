@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "name": "RC low-pass",
+  "circuits": [
+    {
+      "name": "RC low-pass",
+      "schematic": {
+        "components": [
+          {
+            "id": 1,
+            "name": "V1",
+            "kind": "VoltageSource",
+            "position": {
+              "x": 0,
+              "y": 4
+            },
+            "rotation": 1,
+            "mirror_x": false,
+            "mirror_y": false,
+            "value": 1.0
+          },
+          {
+            "id": 2,
+            "name": "R1",
+            "kind": "Resistor",
+            "position": {
+              "x": 6,
+              "y": 0
+            },
+            "rotation": 0,
+            "mirror_x": false,
+            "mirror_y": false,
+            "value": 1000.0
+          },
+          {
+            "id": 3,
+            "name": "C1",
+            "kind": "Capacitor",
+            "position": {
+              "x": 12,
+              "y": 4
+            },
+            "rotation": 1,
+            "mirror_x": false,
+            "mirror_y": false,
+            "value": 1e-6
+          },
+          {
+            "id": 4,
+            "name": "GND1",
+            "kind": "Ground",
+            "position": {
+              "x": 6,
+              "y": 8
+            },
+            "rotation": 0,
+            "mirror_x": false,
+            "mirror_y": false,
+            "value": 0.0
+          }
+        ],
+        "wires": [
+          {
+            "id": 5,
+            "points": [
+              {
+                "x": 0,
+                "y": 2
+              },
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 4,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": 6,
+            "points": [
+              {
+                "x": 8,
+                "y": 0
+              },
+              {
+                "x": 12,
+                "y": 0
+              },
+              {
+                "x": 12,
+                "y": 2
+              }
+            ]
+          },
+          {
+            "id": 7,
+            "points": [
+              {
+                "x": 0,
+                "y": 6
+              },
+              {
+                "x": 0,
+                "y": 8
+              },
+              {
+                "x": 6,
+                "y": 8
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "points": [
+              {
+                "x": 12,
+                "y": 6
+              },
+              {
+                "x": 12,
+                "y": 8
+              },
+              {
+                "x": 6,
+                "y": 8
+              }
+            ]
+          }
+        ]
+      },
+      "analysis": {
+        "Transient": {
+          "stop": 0.005,
+          "step": 0.00001
+        }
+      },
+      "plot": {
+        "nodes": [
+          2
+        ],
+        "x_range": null,
+        "y_range": null
+      },
+      "result": null
+    }
+  ],
+  "active_circuit": 0,
+  "layout": {
+    "dark": false,
+    "scale": 1.0,
+    "diagnostics_open": false
+  }
+}

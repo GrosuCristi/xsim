@@ -1,0 +1,30 @@
+* xsim reference: twelve-diode string with RS swept from 0 V (DCAC-3),
+* tests/dc_convergence.rs. LTspice's default tolerances (see
+* dc_diode_string2_op.cir).
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 n0 0 0
+R1 n0 n1 100
+D1 n1 n2 DX
+D2 n2 n3 DX
+D3 n3 n4 DX
+D4 n4 n5 DX
+D5 n5 n6 DX
+D6 n6 n7 DX
+D7 n7 n8 DX
+D8 n8 n9 DX
+D9 n9 n10 DX
+D10 n10 n11 DX
+D11 n11 n12 DX
+D12 n12 0 DX
+.model DX D(IS=2e-14 N=1.4 RS=8)
+.options plotwinsize=0 numdgt=15 measdgt=15 gmin=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.dc V1 0 30 0.5
+.meas DC v2_1 FIND V(n2) AT=1
+.meas DC v2_5 FIND V(n2) AT=5
+.meas DC v2_30 FIND V(n2) AT=30
+.end

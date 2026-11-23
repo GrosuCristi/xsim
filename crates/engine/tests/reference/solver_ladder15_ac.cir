@@ -1,0 +1,59 @@
+* xsim reference: 15-section ladder of 1 ohm, 1 uH (Rser=0) and 1 nF to ground
+* with a 50 ohm load, AC stop band down to -1379 dB (SR-2),
+* tests/solver.rs. The .ac list frequencies are xsim's decade points
+* (10 per decade from 1 MHz).
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 in 0 AC 1
+R0 in m0 1
+L0 m0 n0 1u Rser=0
+C0 n0 0 1n
+R1 n0 m1 1
+L1 m1 n1 1u Rser=0
+C1 n1 0 1n
+R2 n1 m2 1
+L2 m2 n2 1u Rser=0
+C2 n2 0 1n
+R3 n2 m3 1
+L3 m3 n3 1u Rser=0
+C3 n3 0 1n
+R4 n3 m4 1
+L4 m4 n4 1u Rser=0
+C4 n4 0 1n
+R5 n4 m5 1
+L5 m5 n5 1u Rser=0
+C5 n5 0 1n
+R6 n5 m6 1
+L6 m6 n6 1u Rser=0
+C6 n6 0 1n
+R7 n6 m7 1
+L7 m7 n7 1u Rser=0
+C7 n7 0 1n
+R8 n7 m8 1
+L8 m8 n8 1u Rser=0
+C8 n8 0 1n
+R9 n8 m9 1
+L9 m9 n9 1u Rser=0
+C9 n9 0 1n
+R10 n9 m10 1
+L10 m10 n10 1u Rser=0
+C10 n10 0 1n
+R11 n10 m11 1
+L11 m11 n11 1u Rser=0
+C11 n11 0 1n
+R12 n11 m12 1
+L12 m12 n12 1u Rser=0
+C12 n12 0 1n
+R13 n12 m13 1
+L13 m13 n13 1u Rser=0
+C13 n13 0 1n
+R14 n13 m14 1
+L14 m14 n14 1u Rser=0
+C14 n14 0 1n
+RL n14 0 50
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12
+.ac list 1.584893192461114e7 2.511886431509582e7 1e8 1e9
+.meas AC m6 FIND V(n14) AT=1.584893192461114e7
+.meas AC m7 FIND V(n14) AT=2.511886431509582e7
+.meas AC m10 FIND V(n14) AT=1e8
+.meas AC m15 FIND V(n14) AT=1e9
+.end

@@ -1,0 +1,19 @@
+* xsim reference: a latched current switch is a resistor in AC
+* W1 (on: I(VS) = 2 mA > It + Ih) and W2 (off: I(VS2) = 0) between AC sources and
+* ground; the control currents carry AC 1 as well, which a latch ignores.
+* LTspice 24.1.9: I(W1) = -20 dB (0.1 A, 1/Ron) and I(W2) = -120 dB (1 uA, 1/Roff), 0 degrees.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 AC 1
+I1 0 c DC 2m AC 1
+VS c 0 0
+W1 a 0 VS SWA
+V2 b 0 AC 1
+I2 0 d DC 0 AC 1
+VS2 d 0 0
+W2 b 0 VS2 SWA
+.model SWA CSW(Ron=10 Roff=1e6 It=1m Ih=0.1m)
+.options numdgt=15 measdgt=15
+.ac lin 1 1k 1k
+.meas AC ion FIND I(W1) AT=1k
+.meas AC ioff FIND I(W2) AT=1k
+.end

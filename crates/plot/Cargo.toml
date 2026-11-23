@@ -1,0 +1,24 @@
+[package]
+name = "xsim-plot"
+description = "xsim waveform viewer: GPUI plot panes, traces, cursors, measurements, image and CSV export."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+resvg.workspace = true
+image.workspace = true
+arboard.workspace = true
+xsim-project.workspace = true
+xsim-spice-engine.workspace = true
+xsim-waveform.workspace = true
+
+[dev-dependencies]
+gpui-pre.workspace = true
+
+[lints]
+workspace = true

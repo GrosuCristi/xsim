@@ -1,0 +1,53 @@
+* xsim reference: small-signal terminal currents of devices whose terminals share a node or are grounded (DCAC-1)
+* JA: JFET with gate tied to source; JB: JFET with gate and source grounded;
+* QM1/QM2: current mirror with a diode-connected input transistor; QE: common-emitter stage with grounded emitter and CJS.
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+VDA da 0 DC 5 AC 1
+JA da sa sa JM
+RSA sa 0 100
+VDB db 0 DC 5 AC 1
+JB db 0 0 JM
+I1 0 m DC 100u AC 1u
+QM1 m m 0 QM
+QM2 out m 0 QM
+VOUT out 0 5
+VCC vcc 0 12
+RC vcc c 2k
+RB vcc b 1Meg
+CIN in b 1u
+VIN in 0 DC 0 AC 1
+QE c b 0 QM
+.model JM NJF(VTO=-2 BETA=1.3m LAMBDA=0.02 RD=10 RS=5 CGS=3p CGD=1.5p PB=0.8 B=0.8)
+.model QM NPN(IS=5e-15 BF=180 BR=4 VAF=60 CJE=10p CJC=4p TF=300p CJS=2p VJS=0.7 MJS=0.33)
+.options plotwinsize=0 numdgt=15 gmin=1e-12 reltol=1e-9 abstol=1e-15 vntol=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.ac list 1k 100Meg 1G
+.meas AC ja_ig_re_1k FIND re(Ig(JA)) AT=1k
+.meas AC ja_ig_im_1k FIND im(Ig(JA)) AT=1k
+.meas AC ja_is_re_1k FIND re(Is(JA)) AT=1k
+.meas AC ja_is_im_1k FIND im(Is(JA)) AT=1k
+.meas AC ja_id_re_1k FIND re(Id(JA)) AT=1k
+.meas AC ja_id_im_1k FIND im(Id(JA)) AT=1k
+.meas AC jb_ig_re_100M FIND re(Ig(JB)) AT=100Meg
+.meas AC jb_ig_im_100M FIND im(Ig(JB)) AT=100Meg
+.meas AC jb_is_re_100M FIND re(Is(JB)) AT=100Meg
+.meas AC jb_is_im_100M FIND im(Is(JB)) AT=100Meg
+.meas AC jb_id_re_100M FIND re(Id(JB)) AT=100Meg
+.meas AC jb_id_im_100M FIND im(Id(JB)) AT=100Meg
+.meas AC qm1_ib_re_100M FIND re(Ib(QM1)) AT=100Meg
+.meas AC qm1_ib_im_100M FIND im(Ib(QM1)) AT=100Meg
+.meas AC qm1_ic_re_100M FIND re(Ic(QM1)) AT=100Meg
+.meas AC qm1_ic_im_100M FIND im(Ic(QM1)) AT=100Meg
+.meas AC qm1_ie_re_100M FIND re(Ie(QM1)) AT=100Meg
+.meas AC qm1_ie_im_100M FIND im(Ie(QM1)) AT=100Meg
+.meas AC qe_ib_re_1G FIND re(Ib(QE)) AT=1G
+.meas AC qe_ib_im_1G FIND im(Ib(QE)) AT=1G
+.meas AC qe_ic_re_1G FIND re(Ic(QE)) AT=1G
+.meas AC qe_ic_im_1G FIND im(Ic(QE)) AT=1G
+.meas AC qe_ie_re_1G FIND re(Ie(QE)) AT=1G
+.meas AC qe_ie_im_1G FIND im(Ie(QE)) AT=1G
+.end

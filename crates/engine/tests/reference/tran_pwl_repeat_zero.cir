@@ -1,0 +1,17 @@
+* xsim reference: PWL REPEAT timing, first point at t = 0 and a two-point sequence (T8)
+V1 a 0 PWL REPEAT FOREVER (0 1 1m 4 2m 1) ENDREPEAT
+R1 a 0 1k
+V2 b 0 PWL REPEAT FOREVER (0.5m 1 1m 3) ENDREPEAT
+R2 b 0 1k
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 6m 0 1u
+.meas TRAN a05 FIND V(a) AT=0.5m
+.meas TRAN a19 FIND V(a) AT=1.9m
+.meas TRAN a25 FIND V(a) AT=2.5m
+.meas TRAN a45 FIND V(a) AT=4.5m
+.meas TRAN b02 FIND V(b) AT=0.2m
+.meas TRAN b12 FIND V(b) AT=1.2m
+.meas TRAN b175 FIND V(b) AT=1.75m
+.meas TRAN b25 FIND V(b) AT=2.5m
+.meas TRAN b4 FIND V(b) AT=4m
+.end

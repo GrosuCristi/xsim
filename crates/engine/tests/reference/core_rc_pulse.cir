@@ -1,0 +1,12 @@
+* xsim reference: 1 V step (PULSE, 1 ns edges) into a 1 kohm / 1 uF low-pass
+V1 in 0 PULSE(0 1 0 1n 1n 1 2)
+R1 in out 1k
+C1 out 0 1u
+.tran 0 5m 0 1u
+.options plotwinsize=0 numdgt=15
+.meas TRAN v1ms FIND V(out) AT=1m
+.meas TRAN v2ms FIND V(out) AT=2m
+.meas TRAN v3ms FIND V(out) AT=3m
+.meas TRAN v4ms FIND V(out) AT=4m
+.meas TRAN v5ms FIND V(out) AT=5m
+.end

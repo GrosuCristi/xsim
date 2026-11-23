@@ -1,0 +1,25 @@
+* xsim reference: Greinacher voltage doubler of solver_doubler.cir with 1 mohm
+* ESR (SR-1), tests/ill_conditioned.rs: the transient must run without
+* precision warnings.
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 s 0 SINE(0 10 1k)
+C1 s a 10u
+RESR1 a m 1m
+D1 0 m DD
+D2 m out DD
+RESR2 out k 1m
+C2 k 0 10u
+RL out 0 10k
+.model DD D(IS=1e-14 N=1 RS=0 CJO=0 TT=0)
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.tran 0 5m 0 0.2u
+.meas TRAN vm0 FIND V(m) AT=0
+.meas TRAN vout0 FIND V(out) AT=0
+.meas TRAN vout1 FIND V(out) AT=1m
+.meas TRAN vout5 FIND V(out) AT=5m
+.end

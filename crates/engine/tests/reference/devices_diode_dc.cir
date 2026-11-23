@@ -1,0 +1,38 @@
+* xsim reference: D_SIGNAL forward bias, the DZ test breakdown diode and the DZ_5V1 zener, each through 1 kohm
+* D_SIGNAL and DZ_5V1 are the xsim library entries of the same name: generic
+* models authored for xsim (D13, see crates/engine/src/library.rs). DZ is a
+* test diode, not a library part.
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 1
+R1 a k 1k
+D1 k 0 D_SIGNAL
+R2 a kz 1k
+D2 0 kz DZ
+R3 a kz3 1k
+D3 0 kz3 DZ_5V1
+.model D_SIGNAL D (IS=3e-10 N=1.6 RS=0.4 CJO=2p VJ=0.7 M=0.25 TT=5n BV=100 IBV=100u NBV=1 EG=1.11 XTI=3 FC=0.5 KF=0 AF=1)
+.model DZ D (IS=1e-14 N=1 RS=0 CJO=0 TT=0 BV=5.1 IBV=1m NBV=1 EG=1.11 XTI=3)
+.model DZ_5V1 D (IS=1e-14 N=1 RS=1 CJO=100p VJ=0.8 M=0.4 TT=50n BV=5.095 IBV=5m NBV=2.7 EG=1.11 XTI=3 FC=0.5 KF=0 AF=1)
+.options plotwinsize=0 numdgt=15 gmin=1e-12 reltol=1e-9 abstol=1e-15 vntol=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.dc V1 0 20 0.5
+.meas DC vk_1 FIND V(k) AT=1
+.meas DC vk_2 FIND V(k) AT=2
+.meas DC vk_5 FIND V(k) AT=5
+.meas DC vk_10 FIND V(k) AT=10
+.meas DC vk_20 FIND V(k) AT=20
+.meas DC vz_2 FIND V(kz) AT=2
+.meas DC vz_5 FIND V(kz) AT=5
+.meas DC vz_6 FIND V(kz) AT=6
+.meas DC vz_10 FIND V(kz) AT=10
+.meas DC vz_20 FIND V(kz) AT=20
+.meas DC vz3_2 FIND V(kz3) AT=2
+.meas DC vz3_5 FIND V(kz3) AT=5
+.meas DC vz3_6 FIND V(kz3) AT=6
+.meas DC vz3_10 FIND V(kz3) AT=10
+.meas DC vz3_20 FIND V(kz3) AT=20
+.end

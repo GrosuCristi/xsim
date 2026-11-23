@@ -1,0 +1,70 @@
+[workspace]
+members = [
+    "crates/engine",
+    "crates/project",
+    "crates/waveform",
+    "crates/editor",
+    "crates/plot",
+    "crates/desktop",
+]
+default-members = ["crates/desktop"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/GrosuCristi/xsim"
+
+# Every dependency is pinned exactly; Cargo.lock is committed (Q161).
+[workspace.dependencies]
+# Numerics
+nalgebra = { version = "=0.33.2", default-features = false, features = ["std"] }
+faer = { version = "=0.24.4", default-features = false, features = ["std", "sparse-linalg"] }
+num-complex = "=0.4.6"
+
+# Data
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.149", features = ["float_roundtrip"] }
+tempfile = "=3.27.0"
+dirs = "=4.0.0"
+
+# Desktop
+gpui-kit = "=0.9.1"
+gpui-pre = { version = "=0.3.12", default-features = false, features = ["test-support"] }
+rfd = "=0.16.0"
+resvg = "=0.46.0"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
+arboard = { version = "=3.7.0", features = ["wayland-data-control"] }
+async-channel = "=2.5.0"
+# Build-time only: embeds the Windows icon (crates/desktop/build.rs). MIT.
+embed-resource = "=3.0.12"
+
+# Testing
+proptest = "=1.11.0"
+
+# Workspace crates
+xsim-spice-engine = { path = "crates/engine" }
+xsim-project = { path = "crates/project" }
+xsim-waveform = { path = "crates/waveform" }
+xsim-editor = { path = "crates/editor" }
+xsim-plot = { path = "crates/plot" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

@@ -1,0 +1,26 @@
+* xsim reference: current switch driven by a triangle control current
+* I1 pushes 0 -> 2 mA -> 0 through VS over 2 ms, so W1 (It = 1 mA, Ih = 0.2 mA)
+* turns on at 0.6 ms (1.2 mA) and off at 1.6 ms (0.8 mA). It loads V1 -> R1 -> o
+* with C1 = 10 nF: closed form, V(o) falls through 2.5 V at 0.6000695235659 ms
+* and rises through it at 1.6068350384614 ms. LTspice places a switching
+* instant to about half its maximum step, hence the 0.1 ns maximum step (about
+* a minute): 0.600069481481252 ms and 1.60683501550817 ms; V(o) =
+* 4.99500499500501 V at 0.3 ms, 0.0495049504950846 V at 1 ms, 4.99500499481299 V
+* at 1.9 ms; I(W1) = 4.95049504950846 mA at 1 ms.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+I1 0 c PWL(0 0 1m 2m 2m 0)
+VS c 0 0
+V1 a 0 5
+R1 a o 1k
+C1 o 0 10n
+W1 o 0 VS SWR
+.model SWR CSW(Ron=10 Roff=1Meg It=1m Ih=0.2m)
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 2m 0 0.1n
+.meas TRAN ton WHEN V(o)=2.5 FALL=1
+.meas TRAN toff WHEN V(o)=2.5 RISE=1
+.meas TRAN v03 FIND V(o) AT=0.3m
+.meas TRAN v10 FIND V(o) AT=1m
+.meas TRAN v19 FIND V(o) AT=1.9m
+.meas TRAN i10 FIND I(W1) AT=1m
+.end

@@ -1,0 +1,25 @@
+* xsim reference: relaxation oscillator, a current switch sensing V(c)/100k
+* VS carries V(c)/R2, so W1 (It = 25 uA, Ih = 5 uA) turns on above 30 uA (V(c) =
+* 3 V) and off below 20 uA (2 V), discharging C1 through Ron. The circuit has no
+* DC operating point, so the run starts from rest (uic). Closed form with Roff
+* and R2: period 0.454039611 ms, first rise through 2.5 V at 0.725919589 ms.
+* With this 1 ns maximum step LTspice gives RISE=1 at 0.725919589318672 ms,
+* RISE=2 at 1.18004538589822 ms and RISE=10 at 4.81305286475512 ms, a period of
+* 0.4541259 ms (1.9e-4 above the closed form); with 0.1 us its periods scatter
+* by 2 %.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+VCC vcc 0 5
+R1 vcc c 10k
+C1 c 0 100n
+R2 c s 100k
+VS s 0 0
+W1 c 0 VS CSW1
+.model CSW1 CSW(Ron=10 Roff=1G It=25u Ih=5u)
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 5m 0 1n uic
+.meas TRAN t1 WHEN V(c)=2.5 RISE=1
+.meas TRAN t2 WHEN V(c)=2.5 RISE=2
+.meas TRAN t10 WHEN V(c)=2.5 RISE=10
+.meas TRAN vmax MAX V(c) FROM=2m TO=5m
+.meas TRAN vmin MIN V(c) FROM=2m TO=5m
+.end

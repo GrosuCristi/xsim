@@ -1,0 +1,21 @@
+* xsim reference: two-diode string with RS at low forward bias (DCAC-3),
+* tests/dc_convergence.rs. Each diode's internal node is joined to its
+* terminal by 1/RS but held to the rest only by junction conductances about
+* 1e11 times smaller. LTspice's default tolerances: at xsim's (reltol=1e-6
+* vntol=1e-9) LTspice does not finish.
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 n0 0 0.05
+R1 n0 n1 100
+D1 n1 n2 DX
+D2 n2 0 DX
+.model DX D(IS=2e-14 N=1.4 RS=8)
+.options plotwinsize=0 numdgt=15 measdgt=15 gmin=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.op
+.meas OP v1 FIND V(n1)
+.meas OP v2 FIND V(n2)
+.end

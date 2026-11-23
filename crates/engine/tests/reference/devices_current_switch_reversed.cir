@@ -1,0 +1,45 @@
+* xsim reference: current switches sensing a reversed source, with negative thresholds
+* IX pushes the swept current into VS's + terminal (I(VS) = IX) and on into
+* VS2's - terminal (I(VS2) = -IX). W1 (It = -2^-10 A, Ih = 2^-12 A) senses VS
+* and turns on above -0.000732421875 A; W2 (It = +2^-10 A) senses VS2 and turns
+* on once -IX exceeds 0.001220703125 A. The sweep points k*2^-14 A from
+* -2^-9 A land exactly on the thresholds. Rising (this deck): W1 off (V(p) =
+* 4.99500549395665) up to and including point 20 (IX = -0.000732421875) and on
+* (0.495495495495496) from point 21; W2 on (V(q) = 0.0495049504950495) up to
+* and including point 20 and off (4.995004995005) from point 21. Falling
+* (.dc IX 0.0009765625 -0.001953125 -6.103515625e-5): W1 on down to and
+* including point 12 (IX = -0.001220703125) and off from point 11; W2 off down
+* to and including point 12 and on from point 11. I(VS2) = 0.001953125 at
+* IX = -0.001953125 and I(W1) = 0.0045045045045045 (on, P to N) at the end.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+IX 0 x 0
+VS x y 0.2
+VS2 z y 0
+RY z 0 100
+V1 a 0 5
+R1 a p 1k
+W1 p n VS CSWN
+R2 n 0 100
+V3 b 0 5
+R3 b q 1k
+W2 q 0 VS2 CSWP
+.model CSWN CSW(Ron=10 Roff=1Meg It=-0.0009765625 Ih=0.000244140625)
+.model CSWP CSW(Ron=10 Roff=1Meg It=0.0009765625 Ih=0.000244140625)
+.options reltol=1e-12 abstol=1e-18 vntol=1e-15 gmin=1e-12 numdgt=15 measdgt=15
+.dc IX -0.001953125 0.0009765625 6.103515625e-5
+.meas DC p0 FIND V(p) AT=-0.001953125
+.meas DC p11 FIND V(p) AT=-0.00128173828125
+.meas DC p12 FIND V(p) AT=-0.001220703125
+.meas DC p16 FIND V(p) AT=-0.0009765625
+.meas DC p20 FIND V(p) AT=-0.000732421875
+.meas DC p21 FIND V(p) AT=-0.00067138671875
+.meas DC p48 FIND V(p) AT=0.0009765625
+.meas DC q0 FIND V(q) AT=-0.001953125
+.meas DC q11 FIND V(q) AT=-0.00128173828125
+.meas DC q12 FIND V(q) AT=-0.001220703125
+.meas DC q20 FIND V(q) AT=-0.000732421875
+.meas DC q21 FIND V(q) AT=-0.00067138671875
+.meas DC q48 FIND V(q) AT=0.0009765625
+.meas DC ivs2 FIND I(VS2) AT=-0.001953125
+.meas DC iw1 FIND I(W1) AT=0.0009765625
+.end

@@ -1,0 +1,30 @@
+* xsim reference: a current switch sensing its own current
+* W1 (latch, Ron = 1, Roff = 10k, It = 1 mA, Ih = 0.5 mA) is in series with its
+* control source VSW behind R1 = 1k. Rising (this deck, points off the exact
+* thresholds): I(VSW) = 0.00149090909090909 A at V1 = 16.4 V (off, below 1.5 mA)
+* and 0.0167832167832168 A at 16.8 V (on). Falling (.dc V1 20 0 -0.2): on at
+* 0.6 V (0.000599400599400599 A, above 0.5 mA) and off at 0.4 V
+* (3.63636363636403e-05 A).
+* W3 (smooth, Ron = 100, Roff = 10k, It = 1 mA, Ih = -1 mA) senses its own
+* current through VSW3 behind R3 = 1k from V3. ".dc V3 1.999 2.001 0.001" gives
+* V(f) = 1.79355781754769 / 1.79442348861482 / 1.79528908890498 V, so
+* dV(f)/dV3 = 0.865635678645. LTspice's own .ac of W3 gives -0.942101 dB
+* (0.89739): it leaves out the dependence on the control current, so the DC
+* slope is the reference.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 0
+R1 a b 1k
+VSW b c 0
+W1 c 0 VSW CSWL
+V3 e 0 DC 2 AC 1
+R3 e f 1k
+VSW3 f g 0
+W3 g 0 VSW3 CSWF
+.model CSWL CSW(Ron=1 Roff=10k It=1m Ih=0.5m)
+.model CSWF CSW(Ron=100 Roff=10k It=1m Ih=-1m)
+.options reltol=1e-12 abstol=1e-18 vntol=1e-15 gmin=1e-12 numdgt=15 measdgt=15
+.dc V1 0 20 0.4
+.meas DC i164 FIND I(VSW) AT=16.4
+.meas DC i168 FIND I(VSW) AT=16.8
+.meas DC vf FIND V(f) AT=0
+.end

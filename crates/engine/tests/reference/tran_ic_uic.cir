@@ -1,0 +1,24 @@
+* xsim reference: the same initial conditions with uic (T6)
+V1 in 0 1
+R1 in out 1k
+C1 out 0 1u IC=2
+R2 d 0 1k
+C2 d 0 1u IC=2
+L1 n 0 1m IC=1m Rser=0
+R3 n 0 1
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 3m 0 1u uic
+.meas TRAN out0 FIND V(out) AT=0
+.meas TRAN d0 FIND V(d) AT=0
+.meas TRAN n0 FIND V(n) AT=0
+.meas TRAN in0 FIND V(in) AT=0
+.meas TRAN il0 FIND I(L1) AT=0
+.meas TRAN ic1_0 FIND I(C1) AT=0
+.meas TRAN ic2_0 FIND I(C2) AT=0
+.meas TRAN out1 FIND V(out) AT=1m
+.meas TRAN d1 FIND V(d) AT=1m
+.meas TRAN il1 FIND I(L1) AT=1m
+.meas TRAN out2 FIND V(out) AT=2m
+.meas TRAN d2 FIND V(d) AT=2m
+.meas TRAN il2 FIND I(L1) AT=2m
+.end

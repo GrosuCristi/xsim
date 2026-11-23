@@ -1,0 +1,22 @@
+* xsim reference: sign of a current switch's control current (W element, CSW model)
+* R1 draws 1 mA out of V1's positive terminal, so I(V1) = -1 mA: W1 (It = 0.5 mA)
+* and W2 (It = -0.5 mA) are both off, I(W) = 1 uA. With "R1 a 0 1k" replaced by
+* "I1 0 a 1m" and V1 set to 0 V, I1 pushes 1 mA into V1's positive terminal:
+* I(V1) = 1 mA, W1 and W2 are on (1 A) and a third switch with It = 2 mA is off.
+* The control is the source current from its + terminal through it to its -
+* terminal, the same sign as the source's recorded current I(V1).
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 1
+R1 a 0 1k
+V2 b 0 1
+W1 b 0 V1 CSW1
+V3 c 0 1
+W2 c 0 V1 CSW2
+.model CSW1 CSW(Ron=1 Roff=1Meg It=0.5m Ih=0)
+.model CSW2 CSW(Ron=1 Roff=1Meg It=-0.5m Ih=0)
+.options numdgt=15 measdgt=15
+.dc V2 1 2 1
+.meas DC iw1 FIND I(W1) AT=1
+.meas DC iw2 FIND I(W2) AT=1
+.meas DC iv1 FIND I(V1) AT=1
+.end

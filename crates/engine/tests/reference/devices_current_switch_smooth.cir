@@ -1,0 +1,29 @@
+* xsim reference: smooth-mode current switches (Ih < 0) and their small-signal slopes
+* W3 senses its own output through R5 and VS3 (control I(VS3) = V(o3)/1k); W4
+* is controlled by I4 pushed through VC4. Both sit inside their log-cubic
+* transitions. This deck gives dV(o3)/dV3 by central differences: V(o3) =
+* 1.21950958143819 / 1.21980543720808 / 1.22010122571417 V at V3 = 2.999 / 3 /
+* 3.001 V. ".dc I4 1.199m 1.201m 0.001m" gives V(o4) = 0.928923182551501 /
+* 0.923345515526751 / 0.917797058790221 V, so dV(o4)/dI4 = -5563.06188064 V/A.
+* LTspice's own .ac leaves out the dependence on the control current (V(o4) = 0
+* in an .ac of this circuit), so the DC slopes are the reference.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V3 a3 0 DC 3 AC 1
+R3 a3 o3 1k
+W3 o3 0 VS3 CSWF
+R5 o3 s3 1k
+VS3 s3 0 0
+V4 a4 0 3
+R4 a4 o4 1k
+W4 o4 0 VC4 CSWS
+I4 0 c4 DC 1.2m AC 1
+VC4 c4 0 0
+.model CSWS CSW(Ron=100 Roff=100k It=1m Ih=-0.5m)
+.model CSWF CSW(Ron=1k Roff=10k It=1m Ih=-1m)
+.options reltol=1e-12 abstol=1e-18 vntol=1e-15 gmin=1e-12 numdgt=15 measdgt=15
+.dc V3 2.999 3.001 0.001
+.meas DC lo FIND V(o3) AT=2.999
+.meas DC mid FIND V(o3) AT=3
+.meas DC hi FIND V(o3) AT=3.001
+.meas DC o4 FIND V(o4) AT=3
+.end

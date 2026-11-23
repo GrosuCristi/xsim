@@ -1,0 +1,10 @@
+* xsim reference: 1 kHz SINE through a 1 kohm / 1 kohm divider, default maximum step (T2)
+V1 in 0 SINE(0 1 1k)
+R1 in out 1k
+R2 out 0 1k
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15
+.tran 0 0.1
+.meas TRAN vmax MAX V(out)
+.meas TRAN vmin MIN V(out)
+.meas TRAN v5025 FIND V(out) AT=50.25m
+.end

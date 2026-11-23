@@ -1,0 +1,12 @@
+* xsim reference: 1 V source switched onto a 1 kohm / 1 uF low-pass at rest (uic)
+V1 in 0 1
+R1 in out 1k
+C1 out 0 1u IC=0
+.options plotwinsize=0 numdgt=15 reltol=1e-9
+.tran 0 5m 0 100n uic
+.meas TRAN v1ms FIND V(out) AT=1m
+.meas TRAN v2ms FIND V(out) AT=2m
+.meas TRAN v3ms FIND V(out) AT=3m
+.meas TRAN v4ms FIND V(out) AT=4m
+.meas TRAN v5ms FIND V(out) AT=5m
+.end

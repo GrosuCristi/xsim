@@ -1,0 +1,5 @@
+// The xsim application icon (D20), embedded by build.rs. GPUI loads icon
+// resource 1 for its windows, so Windows shows it on the window, the
+// taskbar and the executable. GPUI links its own manifest (resource type 24,
+// id 1); this file must not add another.
+1 ICON "xsim.ico"

@@ -1,0 +1,29 @@
+* xsim reference: buck stage switched on by a fast gate edge at the start of the run
+* S1 (Ron = 10 mohm) connects VIN to the switch node for one 4 us gate pulse;
+* the gate edges take 10 ns, so the control voltage crosses the threshold at
+* 5e8 V/s. A Schottky freewheeling diode with 150 pF holds the switch node, and
+* L1 feeds C1 || RL. While the switch is on (from 5 ns to 4.015 us) the circuit
+* is linear, with a closed-form solution.
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+VIN vin 0 12
+S1 vin sw g 0 SWB
+D1 0 sw DS
+L1 sw out 10u
+C1 out 0 10u
+RL out 0 5
+VG g 0 PULSE(0 5 0 10n 10n 4u 10u 1)
+.model SWB SW(Ron=0.01 Roff=1Meg Vt=2.5 Vh=0)
+.model DS D(IS=2.3u N=1.05 RS=0.1 CJO=150p VJ=0.5 M=0.5 BV=40 IBV=0.5m EG=0.69 XTI=2)
+.options reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 numdgt=15 plotwinsize=0 measdgt=15 tnom=26.9996851609185
+.temp 26.9996851609185
+.tran 0 5u 0 uic
+.meas TRAN il3 FIND I(L1) AT=3u
+.meas TRAN il4 FIND I(L1) AT=4u
+.meas TRAN vo4 FIND V(out) AT=4u
+.meas TRAN il5 FIND I(L1) AT=5u
+.meas TRAN vo5 FIND V(out) AT=5u
+.end

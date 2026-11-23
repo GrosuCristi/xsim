@@ -1,0 +1,13 @@
+* xsim reference: series capacitors, node f reached only through capacitors
+* (INT-3, D15), tests/floating_nodes.rs.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 a 0 PULSE(0 1 0.1m 1u 1u 1 0)
+R1 a 0 1k
+C1 f 0 1u
+C2 f a 1u
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12
+.tran 0 1m 0 1u
+.meas TRAN vf0 FIND V(f) AT=0
+.meas TRAN vf05 FIND V(f) AT=0.5m
+.meas TRAN vf1 FIND V(f) AT=1m
+.end

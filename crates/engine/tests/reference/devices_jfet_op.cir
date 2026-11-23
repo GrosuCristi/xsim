@@ -1,0 +1,53 @@
+* xsim reference: NJF_MID (N), PJF_MID (P) and NJF_HIGH (N, with RD and RS) self-biased JFET stages, operating point
+* NJF_MID, PJF_MID and NJF_HIGH are the xsim library entries of the same name:
+* generic models authored for xsim (D13, see crates/engine/src/library.rs).
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+* The two-point .dc sweep only exists so .meas can read the VDD = 15 V point.
+VDD dd 0 15
+RD dd d 2.2k
+RS s 0 1k
+CS s 0 100u
+RG g 0 1Meg
+Cin in g 1u
+Vin in 0 0 AC 1
+J1 d g s NJF_MID
+VSS ss 0 -15
+RD2 d2 ss 2.2k
+RS2 s2 0 1k
+RG2 g2 0 1Meg
+J2 d2 g2 s2 PJF_MID
+RD3 dd d3 1k
+RS3 s3 0 220
+CS3 s3 0 100u
+RG3 g3 0 1Meg
+Cin3 in g3 1u
+J3 d3 g3 s3 NJF_HIGH
+.model NJF_MID NJF (VTO=-2 BETA=1.05m LAMBDA=0.02 RD=0 RS=0 CGS=4p CGD=1.5p PB=0.8 IS=1e-14 B=1 VTOTC=-2m BETATCE=-0.5 FC=0.5 KF=0 AF=1)
+.model PJF_MID PJF (VTO=-2 BETA=1.05m LAMBDA=0.02 RD=0 RS=0 CGS=6p CGD=2.5p PB=0.8 IS=2e-14 B=1 VTOTC=-2m BETATCE=-0.5 FC=0.5 KF=0 AF=1)
+.model NJF_HIGH NJF (VTO=-3 BETA=1.9m LAMBDA=0.025 RD=5 RS=5 CGS=6p CGD=2.5p PB=0.8 IS=5e-14 B=1 VTOTC=-2m BETATCE=-0.5 FC=0.5 KF=0 AF=1)
+.options plotwinsize=0 numdgt=15 gmin=1e-12 reltol=1e-9 abstol=1e-15 vntol=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.dc VDD 14 15 1
+.meas DC vs FIND V(s) AT=15
+.meas DC vd FIND V(d) AT=15
+.meas DC vg FIND V(g) AT=15
+.meas DC idj1 FIND Id(J1) AT=15
+.meas DC igj1 FIND Ig(J1) AT=15
+.meas DC isj1 FIND Is(J1) AT=15
+.meas DC vs2 FIND V(s2) AT=15
+.meas DC vd2 FIND V(d2) AT=15
+.meas DC vg2 FIND V(g2) AT=15
+.meas DC idj2 FIND Id(J2) AT=15
+.meas DC igj2 FIND Ig(J2) AT=15
+.meas DC isj2 FIND Is(J2) AT=15
+.meas DC vs3 FIND V(s3) AT=15
+.meas DC vd3 FIND V(d3) AT=15
+.meas DC vg3 FIND V(g3) AT=15
+.meas DC idj3 FIND Id(J3) AT=15
+.meas DC igj3 FIND Ig(J3) AT=15
+.meas DC isj3 FIND Is(J3) AT=15
+.end

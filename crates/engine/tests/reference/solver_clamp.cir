@@ -1,0 +1,22 @@
+* xsim reference: AC-coupled clamp, 1 uF into 10 mohm and antiparallel
+* diodes, no load (SR-1), tests/ill_conditioned.rs. The 0.1 us maximum step
+* is where LTspice's own result has converged (at its default step it is
+* 1.5e-4 off).
+* LTspice 24 computes kT/q from CODATA-1998 constants, 1.0489e-6 above the
+* exact SI value xsim uses. Running LTspice at TEMP = TNOM = 26.9996851609185 degC
+* gives its kT/q the value xsim has at 27 degC, so the comparison checks the
+* device equations rather than the physical constants.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+V1 s 0 SINE(0 1 1k)
+C1 s a 1u
+R1 a b 10m
+D1 b 0 DD
+D2 0 b DD
+.model DD D(IS=1e-14 N=1 RS=0 CJO=0 TT=0)
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-6 abstol=1e-12 vntol=1e-9 gmin=1e-12 tnom=26.9996851609185
+.temp 26.9996851609185
+.tran 0 2m 0 0.1u
+.meas TRAN vb0 FIND V(b) AT=0
+.meas TRAN vb05 FIND V(b) AT=0.5m
+.meas TRAN vb2 FIND V(b) AT=2m
+.end
