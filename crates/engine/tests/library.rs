@@ -61,6 +61,7 @@ fn every_entry_is_a_generic_model_with_complete_metadata() {
     check_metadata(&library::diodes(), |m| &m.name, "Diodes");
     check_metadata(&library::bjts(), |m| &m.name, "Transistors");
     check_metadata(&library::jfets(), |m| &m.name, "Transistors");
+    check_metadata(&library::opamps(), |m| &m.name, "Op-amps");
 }
 
 #[test]
@@ -81,6 +82,9 @@ fn names_start_with_the_device_type() {
             Polarity::P => "PJF_",
         };
         assert_generic_name(&e.model.name, &[prefix]);
+    }
+    for e in library::opamps() {
+        assert_generic_name(&e.model.name, &["OA_"]);
     }
 }
 
@@ -111,6 +115,12 @@ fn lookup_is_exact_and_case_sensitive() {
     assert!(library::bjt("npn_gp").is_none());
     assert!(library::bjt("NPN_GP ").is_none());
     assert!(library::jfet("no such part").is_none());
+    assert!(library::opamp("oa_gp").is_none());
+    assert_eq!(library::default_opamp(), "OA_GP");
+    assert_eq!(
+        library::opamp(library::default_opamp()).map(|m| m.kind),
+        Some(OpAmpKind::Macro)
+    );
 }
 
 fn leaf<M>(entry: &ModelEntry<M>) -> &'static str {
@@ -1248,5 +1258,126 @@ fn jfets_meet_their_targets() {
         let gfs = (jfet_drain_current(&m, 5e-3, 10.0) - jfet_drain_current(&m, -5e-3, 10.0)) / 1e-2;
         assert_within(gfs, t.gfs, 0.05, &format!("{n}: gfs"));
         assert_within(input_capacitance(&m), t.ciss, 0.03, &format!("{n}: Ciss"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Op-amps (D26): each entry's targets by simulation.
+
+/// Supplies ±15 V and the op-amp `U1` on `[in+, in−, out]`.
+fn opamp_circuit(model: OpAmpModel, input: Source, follower: bool) -> Circuit {
+    let mut c = Circuit::new();
+    let vp = c.node("vp");
+    let vn = c.node("vn");
+    let p = c.node("p");
+    let out = c.node("out");
+    c.add(Element::new(
+        "VP",
+        [vp, GROUND],
+        Device::VoltageSource(Source::dc(15.0)),
+    ));
+    c.add(Element::new(
+        "VN",
+        [vn, GROUND],
+        Device::VoltageSource(Source::dc(-15.0)),
+    ));
+    c.add(Element::new(
+        "VIN",
+        [p, GROUND],
+        Device::VoltageSource(input),
+    ));
+    let n = if follower { out } else { GROUND };
+    c.add(Element::new(
+        "U1",
+        [p, n, out, vp, vn],
+        Device::OpAmp { model },
+    ));
+    c
+}
+
+#[test]
+fn every_opamp_meets_its_gain_bandwidth_slew_and_swing_targets() {
+    let entries = library::opamps();
+    let kinds: BTreeSet<_> = entries.iter().map(leaf).collect();
+    for kind in ["Ideal", "General purpose", "Fast", "Rail-to-rail"] {
+        assert!(kinds.contains(kind), "no {kind} op-amp");
+    }
+    // Targets: [AOL, GBW, slew, RIN, ROUT, headroom] as the sources state.
+    let targets = [
+        (
+            "OA_IDEAL",
+            [1e6, f64::INFINITY, f64::INFINITY, f64::INFINITY, 1e-3, 0.0],
+        ),
+        ("OA_GP", [1e5, 1e6, 0.5e6, 2e6, 75.0, 1.5]),
+        ("OA_FAST", [1e5, 10e6, 10e6, 1e6, 50.0, 1.5]),
+        ("OA_RRIO", [3.16e5, 3e6, 2e6, 10e6, 30.0, 0.05]),
+    ];
+    assert_eq!(entries.len(), targets.len());
+    for (name, [aol, gbw, slew, rin, rout, headroom]) in targets {
+        let model = library::opamp(name).expect(name);
+        let params = [model.aol, model.gbw, model.slew, model.rin, model.rout];
+        assert_eq!(params, [aol, gbw, slew, rin, rout], "{name}");
+        assert_eq!([model.headroom_pos, model.headroom_neg], [headroom; 2]);
+
+        // Open-loop DC gain: 10 µV in.
+        let r = operating_point(&opamp_circuit(model.clone(), Source::dc(10e-6), false));
+        assert_within(
+            value(&r, "V(out)") / 10e-6,
+            aol,
+            1e-9,
+            &format!("{name} AOL"),
+        );
+
+        // Output swing: overdriven both ways, no load.
+        let ideal = model.kind == OpAmpKind::Ideal;
+        let swing = if ideal { 0.0 } else { headroom };
+        for (drive, limit) in [(1.0, 15.0 - swing), (-1.0, swing - 15.0)] {
+            let r = operating_point(&opamp_circuit(model.clone(), Source::dc(drive), false));
+            assert_within(value(&r, "V(out)"), limit, 1e-9, &format!("{name} swing"));
+        }
+        if ideal {
+            assert!(model.gbw.is_infinite() && model.slew.is_infinite());
+            continue;
+        }
+
+        // Unity-gain crossing of the open-loop gain at GBW.
+        let c = opamp_circuit(model.clone(), Source::ac(0.0, 1.0, 0.0), false);
+        let (re, im) = phasor(&simulate_ok(&c, &ac_at(gbw)), "V(out)");
+        assert_within(re.hypot(im), 1.0, 1e-6, &format!("{name} |A(GBW)|"));
+
+        // Slew: a follower driven by a 10 V step ramps at `slew` (less the
+        // rout/rin leak to the input), timed between 2 V and 6 V.
+        let step = Source::with_waveform(Waveform::Pulse {
+            initial: 0.0,
+            pulsed: 10.0,
+            delay: 0.0,
+            rise: 1e-9,
+            fall: 1e-9,
+            width: 1.0,
+            period: 2.0,
+            cycles: None,
+        });
+        let duration = 20.0 / slew;
+        let spec = Analysis::Transient(Transient {
+            stop: duration,
+            step: duration / 200.0,
+            start_save: 0.0,
+            max_step: None,
+            initial_state: InitialState::OperatingPoint,
+        });
+        let r = simulate_ok(&opamp_circuit(model.clone(), step, true), &spec);
+        let t = &r.axis.values;
+        let v = r.signal("V(out)").and_then(Signal::real).expect("V(out)");
+        let when = |level: f64| {
+            let k = v.iter().position(|&x| x >= level).expect("crossing");
+            t[k - 1] + (level - v[k - 1]) / (v[k] - v[k - 1]) * (t[k] - t[k - 1])
+        };
+        let measured = 4.0 / (when(6.0) - when(2.0));
+        assert_within(
+            measured * (1.0 + rout / rin),
+            slew,
+            1e-6,
+            &format!("{name} slew"),
+        );
     }
 }

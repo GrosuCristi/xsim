@@ -7,6 +7,7 @@ mod fixtures;
 mod grid;
 mod harness;
 mod labels;
+mod opamps;
 mod pin_wiring;
 mod placement;
 mod probing;

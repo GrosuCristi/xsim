@@ -30,7 +30,10 @@ pub(super) fn summary(part: &Part) -> String {
         } => with_initial(format_value(*inductance, "H"), *initial_current, "A"),
         Part::VoltageSource { source } => source_summary(source, "V"),
         Part::CurrentSource { source } => source_summary(source, "A"),
-        Part::Diode { model } | Part::Bjt { model, .. } | Part::Jfet { model, .. } => model.clone(),
+        Part::Diode { model }
+        | Part::Bjt { model, .. }
+        | Part::Jfet { model, .. }
+        | Part::OpAmp { model } => model.clone(),
         Part::VoltageSwitch { model } => voltage_switch_summary(model),
         Part::CurrentSwitch { control, model } => current_switch_summary(control, model),
         Part::Ground => String::new(),

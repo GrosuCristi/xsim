@@ -36,19 +36,27 @@ pub fn place_text(component: &Component) -> TextPlacement {
     let (min, max) = component.bounds();
     let pins = component.pins();
     let blocked = |side: TextSide| pins.iter().any(|&p| on_face_middle(p, min, max, side));
-    let side = [
+    let free = [
         TextSide::Right,
         TextSide::Left,
         TextSide::Above,
         TextSide::Below,
     ]
     .into_iter()
-    .find(|&s| !blocked(s))
-    .unwrap_or(TextSide::Right);
+    .find(|&s| !blocked(s));
+    let side = free.unwrap_or(TextSide::Right);
     let (min, max) = (Vec2::from_grid(min), Vec2::from_grid(max));
     let mid = Vec2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
+    // With a pin in the middle of every face (an op-amp, D26), the text
+    // goes right but level with the upper quarter of the body, clear of the
+    // lead leaving the middle of that face.
+    let right_y = if free.is_some() {
+        mid.y
+    } else {
+        min.y + (max.y - min.y) * 0.25
+    };
     let anchor = match side {
-        TextSide::Right => Vec2::new(max.x + GAP, mid.y),
+        TextSide::Right => Vec2::new(max.x + GAP, right_y),
         TextSide::Left => Vec2::new(min.x - GAP, mid.y),
         TextSide::Above => Vec2::new(mid.x, min.y - GAP * 0.5),
         TextSide::Below => Vec2::new(mid.x, max.y + GAP * 0.5),
@@ -71,8 +79,37 @@ fn on_face_middle(p: Point, min: Point, max: Point, side: TextSide) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{TextSide, place_text};
-    use xsim_project::{Component, Orientation, Part, Point};
+    use xsim_project::{Component, Orientation, Part, PartKind, Point};
     use xsim_spice_engine::Polarity;
+
+    /// D26: an op-amp has a pin in the middle of every face, so its text
+    /// goes right, level with the top quarter of its body: clear of the
+    /// output lead, whichever way it is turned.
+    #[test]
+    fn opamp_text_clears_the_lead_in_the_middle_of_its_side() {
+        for rotation in 0..4 {
+            let c = Component {
+                id: 1,
+                name: "U1".into(),
+                position: Point::new(0, 0),
+                orientation: Orientation {
+                    rotation,
+                    ..Orientation::default()
+                },
+                part: Part::default_for(PartKind::OpAmp),
+            };
+            let placement = place_text(&c);
+            assert_eq!(placement.side, TextSide::Right, "rotation {rotation}");
+            let (min, max) = c.bounds();
+            assert_eq!(placement.anchor.x, max.x as f32 + super::GAP);
+            let middle = (min.y + max.y) as f32 * 0.5;
+            assert!(
+                placement.anchor.y <= middle - 2.0,
+                "rotation {rotation}: {:?}",
+                placement.anchor
+            );
+        }
+    }
 
     fn component(part: Part, rotation: u8, mirror_x: bool) -> Component {
         Component {

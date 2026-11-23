@@ -1,0 +1,68 @@
+* xsim reference: op-amp (D26) rail clipping against an independent macro-model,
+* tests/devices_opamp.rs (stages B and C). LTspice finds no DC operating point
+* for these stages when clipped, so they start at 0 V, step at 1 us and their
+* clipped values are read after they settle (30 us).
+* The macro-model OAM is written independently of devices_opamp_macro.cir: an
+* E source for AOL*vd, the state on a 1 uF capacitor charged by
+* 1u*SLEW*tanh(e/L) (so dx/dt = SLEW tanh(e/L), L = SLEW*AOL/(2 pi GBW)),
+* e = AOL vd - x - c(x), and the span-guarded limits, softplus T(x) and clamp
+* c(x) of crates/engine/src/devices/opamp.rs (knee k = 10 mV, G = 1e9,
+* m = 0.5 V, supply split 1 uA). OAI is the ideal op-amp: x = AOL vd, no RIN.
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+.param k=0.01 m=0.5 G=1e9 eps=1e-6
+.func sp(v) {max(v,0)+k*ln(1+exp(-abs(v)/k))}
+.subckt OAM inp inn out vp vn params: aol=1e5 gbw=1e6 slew=0.5e6 rin=2e6 rout=75 hp=1.5 hn=1.5
+RIN inp inn {rin}
+EA a 0 inp inn {aol}
+BHI hi 0 V=(V(vp)-hp+V(vn)+hn)/2+sp((V(vp)-hp-V(vn)-hn)/2)
+BLO lo 0 V=(V(vp)-hp+V(vn)+hn)/2-sp((V(vp)-hp-V(vn)-hn)/2)
+BC c 0 V=G*(sp(V(x)-V(hi)-m)-sp(V(lo)-m-V(x)))
+CX x 0 1u
+BX 0 x I=1u*slew*tanh((V(a)-V(x)-V(c))/(slew*aol/(2*pi*gbw)))
+BT t 0 V=V(x)-sp(V(x)-V(hi))+sp(V(lo)-V(x))
+RO t o {rout}
+VS o out 0
+BP vp 0 I=I(VS)*(1+tanh(I(VS)/eps))/2
+BN vn 0 I=I(VS)*(1-tanh(I(VS)/eps))/2
+.ends
+.subckt OAI inp inn out vp vn params: aol=1e6 rout=1m
+BHI hi 0 V=(V(vp)+V(vn))/2+sp((V(vp)-V(vn))/2)
+BLO lo 0 V=(V(vp)+V(vn))/2-sp((V(vp)-V(vn))/2)
+EX x 0 inp inn {aol}
+BT t 0 V=V(x)-sp(V(x)-V(hi))+sp(V(lo)-V(x))
+RO t o {rout}
+VS o out 0
+BP vp 0 I=I(VS)*(1+tanh(I(VS)/eps))/2
+BN vn 0 I=I(VS)*(1-tanh(I(VS)/eps))/2
+.ends
+* B: OA_RRIO inverting gain -10 on +5/-10 V into 1 k; a 2 V step clips low.
+VP3 vp3 0 5
+VN3 vn3 0 -10
+VIN3 in3 0 PULSE(0 2 1u 1n 1n 1 2)
+R13 in3 n3 1k
+R23 n3 out3 10k
+RL3 out3 0 1k
+XU3 0 n3 out3 vp3 vn3 OAM params: aol=3.16e5 gbw=3e6 slew=2e6 rin=10e6 rout=30 hp=0.05 hn=0.05
+* C: two OA_IDEAL gain-2 stages on a 5 V single supply: 3 V into 500 ohm clips, 1.2 V does not.
+VP4 vp4 0 5
+VIN4 in4 0 PULSE(0 3 1u 1n 1n 1 2)
+R14 n4 0 1k
+R24 n4 out4 1k
+RL4 out4 0 500
+XU4 in4 n4 out4 vp4 0 OAI
+VIN5 in5 0 PULSE(0 1.2 1u 1n 1n 1 2)
+R15 n5 0 1k
+R25 n5 out5 1k
+XU5 in5 n5 out5 vp4 0 OAI
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15
+.save V(out3) V(n3) I(VN3) V(out4) V(out5) I(VP4)
+.tran 0 30u 0 2n
+.meas TRAN c3 FIND V(out3) AT=3u
+.meas TRAN c30 FIND V(out3) AT=30u
+.meas TRAN cn30 FIND V(n3) AT=30u
+.meas TRAN cin FIND I(VN3) AT=30u
+.meas TRAN cdn WHEN V(out3)=-5 FALL=1
+.meas TRAN d4 FIND V(out4) AT=30u
+.meas TRAN d5 FIND V(out5) AT=30u
+.meas TRAN dip FIND I(VP4) AT=30u
+.end

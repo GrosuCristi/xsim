@@ -21,7 +21,7 @@ use xsim_spice_engine::{
 /// Opens the component library from the toolbar, searches for `query` and
 /// picks the best match with Enter. The library is a window of its own
 /// (D22).
-fn pick_from_library(h: &mut Harness, query: &str) {
+pub(super) fn pick_from_library(h: &mut Harness, query: &str) {
     h.click_control("toolbar-library");
     h.cx.run_until_parked();
     let owner = h.cx.update(|window, _| window.window_handle());

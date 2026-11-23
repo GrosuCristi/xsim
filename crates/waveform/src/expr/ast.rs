@@ -5,8 +5,11 @@
 pub(crate) const GROUND_NODE: &str = "0";
 
 /// Prefixes of current probes, as they appear in recorded signal names:
-/// two-terminal elements, BJT terminals and JFET terminals.
-pub(crate) const CURRENT_PREFIXES: [&str; 7] = ["I", "Ic", "Ib", "Ie", "Id", "Ig", "Is"];
+/// two-terminal elements, BJT terminals, JFET terminals and op-amp
+/// terminals (D26: inputs `Ip`/`In`, output `Io`, supplies `Isp`/`Isn`).
+pub(crate) const CURRENT_PREFIXES: [&str; 12] = [
+    "I", "Ic", "Ib", "Ie", "Id", "Ig", "Is", "Ip", "In", "Io", "Isp", "Isn",
+];
 
 /// Prefix of voltage probes.
 pub(crate) const VOLTAGE_PREFIX: &str = "V";

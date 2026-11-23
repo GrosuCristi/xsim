@@ -238,7 +238,8 @@ impl PropertiesView {
     pub(super) fn set_model(&mut self, item: &LibraryItem, cx: &mut Context<Self>) {
         if let LibraryItem::Diode { model }
         | LibraryItem::Bjt { model, .. }
-        | LibraryItem::Jfet { model, .. } = item
+        | LibraryItem::Jfet { model, .. }
+        | LibraryItem::OpAmp { model } = item
         {
             self.form.set_model(model.clone());
             self.refresh_model();

@@ -1,0 +1,53 @@
+* xsim reference: op-amp (D26) closed-loop AC response around the -3 dB point
+* (about GBW/11 = 91 kHz) against an independent macro-model, tests/devices_opamp.rs
+* (stage A). LTspice prints re() and im() as (dB, phase): 180 deg is negative.
+* The macro-model OAM is written independently of devices_opamp_macro.cir: an
+* E source for AOL*vd, the state on a 1 uF capacitor charged by
+* 1u*SLEW*tanh(e/L) (so dx/dt = SLEW tanh(e/L), L = SLEW*AOL/(2 pi GBW)),
+* e = AOL vd - x - c(x), and the span-guarded limits, softplus T(x) and clamp
+* c(x) of crates/engine/src/devices/opamp.rs (knee k = 10 mV, G = 1e9,
+* m = 0.5 V, supply split 1 uA).
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+.param k=0.01 m=0.5 G=1e9 eps=1e-6
+.func sp(v) {max(v,0)+k*ln(1+exp(-abs(v)/k))}
+.subckt OAM inp inn out vp vn params: aol=1e5 gbw=1e6 slew=0.5e6 rin=2e6 rout=75 hp=1.5 hn=1.5
+RIN inp inn {rin}
+EA a 0 inp inn {aol}
+BHI hi 0 V=(V(vp)-hp+V(vn)+hn)/2+sp((V(vp)-hp-V(vn)-hn)/2)
+BLO lo 0 V=(V(vp)-hp+V(vn)+hn)/2-sp((V(vp)-hp-V(vn)-hn)/2)
+BC c 0 V=G*(sp(V(x)-V(hi)-m)-sp(V(lo)-m-V(x)))
+CX x 0 1u
+BX 0 x I=1u*slew*tanh((V(a)-V(x)-V(c))/(slew*aol/(2*pi*gbw)))
+BT t 0 V=V(x)-sp(V(x)-V(hi))+sp(V(lo)-V(x))
+RO t o {rout}
+VS o out 0
+BP vp 0 I=I(VS)*(1+tanh(I(VS)/eps))/2
+BN vn 0 I=I(VS)*(1-tanh(I(VS)/eps))/2
+.ends
+* A: OA_GP inverting gain -10 on +12/-10 V into 2 k, 0.1 V DC and 1 V AC.
+VP1 vp1 0 12
+VN1 vn1 0 -10
+VIN1 in1 0 0.1 AC 1
+R11 in1 n1 1k
+R21 n1 out1 10k
+RL1 out1 0 2k
+XU1 0 n1 out1 vp1 vn1 OAM
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15
+.ac list 1 5e4 8e4 9e4 9.1e4 1e5 1.2e5 1e6
+.meas AC re_1 FIND re(V(out1)) AT=1
+.meas AC im_1 FIND im(V(out1)) AT=1
+.meas AC re_5e4 FIND re(V(out1)) AT=5e4
+.meas AC im_5e4 FIND im(V(out1)) AT=5e4
+.meas AC re_8e4 FIND re(V(out1)) AT=8e4
+.meas AC im_8e4 FIND im(V(out1)) AT=8e4
+.meas AC re_9e4 FIND re(V(out1)) AT=9e4
+.meas AC im_9e4 FIND im(V(out1)) AT=9e4
+.meas AC re_9p1e4 FIND re(V(out1)) AT=9.1e4
+.meas AC im_9p1e4 FIND im(V(out1)) AT=9.1e4
+.meas AC re_1e5 FIND re(V(out1)) AT=1e5
+.meas AC im_1e5 FIND im(V(out1)) AT=1e5
+.meas AC re_1p2e5 FIND re(V(out1)) AT=1.2e5
+.meas AC im_1p2e5 FIND im(V(out1)) AT=1.2e5
+.meas AC re_1e6 FIND re(V(out1)) AT=1e6
+.meas AC im_1e6 FIND im(V(out1)) AT=1e6
+.end

@@ -7,8 +7,9 @@ use xsim_project::{Component, PartKind};
 const GROUND: &str = "0";
 
 /// The current trace of a part: `I(R1)`, `Ic(Q1)` for transistors,
-/// `Id(J1)` for JFETs and `I(S1)` / `I(W1)` for switches, the current into
-/// P. Ground symbols have none.
+/// `Id(J1)` for JFETs, `I(S1)` / `I(W1)` for switches, the current into
+/// P, and `Io(U1)` for op-amps, the current into the output (D26).
+/// Ground symbols have none.
 pub fn current_signal(component: &Component) -> Option<String> {
     let name = &component.name;
     match component.part.kind() {
@@ -23,6 +24,7 @@ pub fn current_signal(component: &Component) -> Option<String> {
         | PartKind::Diode
         | PartKind::VoltageSwitch
         | PartKind::CurrentSwitch => Some(format!("I({name})")),
+        PartKind::OpAmp => Some(format!("Io({name})")),
     }
 }
 
@@ -68,7 +70,9 @@ mod tests {
                     model: "M".into(),
                 },
                 PartKind::Ground => Part::Ground,
-                PartKind::VoltageSwitch | PartKind::CurrentSwitch => Part::default_for(kind),
+                PartKind::VoltageSwitch | PartKind::CurrentSwitch | PartKind::OpAmp => {
+                    Part::default_for(kind)
+                }
                 _ => Part::Resistor { resistance: 1.0 },
             },
         }
@@ -96,6 +100,10 @@ mod tests {
         assert_eq!(
             current_signal(&named(PartKind::CurrentSwitch, "W1")).as_deref(),
             Some("I(W1)")
+        );
+        assert_eq!(
+            current_signal(&named(PartKind::OpAmp, "U1")).as_deref(),
+            Some("Io(U1)")
         );
     }
 

@@ -215,7 +215,11 @@ fn part_values(part: &Part) -> Vec<f64> {
         // name, so a file with a dangling control still opens.
         Part::VoltageSwitch { model } => vec![model.ron, model.roff, model.vt, model.vh],
         Part::CurrentSwitch { model, .. } => vec![model.ron, model.roff, model.it, model.ih],
-        Part::Diode { .. } | Part::Bjt { .. } | Part::Jfet { .. } | Part::Ground => Vec::new(),
+        Part::Diode { .. }
+        | Part::Bjt { .. }
+        | Part::Jfet { .. }
+        | Part::OpAmp { .. }
+        | Part::Ground => Vec::new(),
     }
 }
 

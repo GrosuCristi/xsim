@@ -12,12 +12,18 @@
 //! | JFET | drain `(4, −4)`, gate `(−4, 0)`, source `(4, 4)` |
 //! | Voltage switch (S) | switch `P (4, −4)`, `N (4, 4)`; control `C+ (−4, −2)`, `C− (−4, 2)` |
 //! | Current switch (W) | `P (−4, 0)`, `N (4, 0)`; the control is a voltage source, by name |
+//! | Op-amp (U) | `+ (−4, 2)`, `− (−4, −2)`, `OUT (4, 0)`, `V+ (0, −4)`, `V− (0, 4)` |
 //! | Ground | `(0, 0)` |
 //!
 //! The voltage switch's switch path runs down its right side, like a
 //! transistor's collector and emitter, with the control input on the left.
 //! Every pin of a part other than ground is at least four grid units from
 //! the centre of its body, so pressing the centre grabs the part.
+//!
+//! The op-amp (D26) is a triangle pointing right with its inputs on the
+//! left, the inverting input on top as in LTspice's op-amp symbols (so the
+//! feedback of an inverting stage runs over the top), the output at the
+//! apex and the supplies on the top (V+) and bottom (V−) edges.
 
 use crate::schematic::{PartKind, Point};
 
@@ -40,6 +46,13 @@ const VOLTAGE_SWITCH_PINS: [Point; 4] = [
     Point::new(4, 4),
     Point::new(-4, -2),
     Point::new(-4, 2),
+];
+const OPAMP_PINS: [Point; 5] = [
+    Point::new(-4, 2),
+    Point::new(-4, -2),
+    Point::new(4, 0),
+    Point::new(0, -4),
+    Point::new(0, 4),
 ];
 const GROUND_PIN: [Point; 1] = [Point::new(0, 0)];
 
@@ -86,6 +99,12 @@ pub fn geometry(kind: PartKind) -> SymbolGeometry {
             pin_names: &["P", "N"],
             body_min: Point::new(-4, -2),
             body_max: Point::new(4, 2),
+        },
+        PartKind::OpAmp => SymbolGeometry {
+            pins: &OPAMP_PINS,
+            pin_names: &["+", "−", "OUT", "V+", "V−"],
+            body_min: Point::new(-4, -4),
+            body_max: Point::new(4, 4),
         },
         PartKind::Ground => SymbolGeometry {
             pins: &GROUND_PIN,

@@ -211,3 +211,20 @@ The owner reported a crash (exit 0xc0000409) when closing a second circuit tab. 
   - While a question is open, other prompting commands are ignored.
   - Panics are written to `crash.log` in the app-data folder; it rotates past 1 MiB.
   - Settings and copy-plot failures are reported in the diagnostics dock instead of toasts.
+
+## D26 — Op-amps (owner decision, 2026-11-23, builds part of Q91)
+
+- **Part:** a 5-pin op-amp (+in, −in, out, V+, V−). Its output swings within the supply rails wired to V+ and V−. It is placed from the component library only (no toolbar button), with designator prefix U.
+- **Models:**
+  - an *ideal* op-amp: very high gain and infinite bandwidth, with the output limited to the rails;
+  - a generic *macro-model*: open-loop gain, one gain-bandwidth pole, slew rate, output limited to the rails minus headroom, input and output resistance.
+- **Library:** generic xsim-authored entries per D13: ideal, general-purpose 1 MHz, fast 10 MHz and rail-to-rail.
+- **Comparators** (the rest of Q91) come later.
+- Op-amps use controlled sources internally only. Users still place only V and I sources (Q82).
+- **D26 (op-amps):**
+  - Pins: + at (−4,2), − at (−4,−2), OUT at (4,0), V+ at (0,−4), V− at (0,4), in an 8×8 body.
+  - Current names: Ip, In, Io, Isp, Isn. Io is negative while the output sources current (current into the pin).
+  - The ideal model has gain 1e6 and Rout 1 mΩ, and shows GBW, slew and Rin as ∞.
+  - The macro-model has a 10 mV smooth knee at every limit and recovers from saturation in about 0.5 V/slew.
+  - Supply current is split between V+ and V− over 1 µA. There is no quiescent current.
+  - In open loop, Rin loads the inputs as documented.

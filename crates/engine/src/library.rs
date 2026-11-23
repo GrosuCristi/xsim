@@ -25,8 +25,13 @@
 //!   1.11 eV` and `XTI = 3` for silicon junctions, `FC = 0.5`, `TNOM = 27 °C`.
 //!   The LEDs' `EG` is solved from a forward-voltage temperature coefficient
 //!   target instead.
+//! * Op-amps (D26, names `OA_`) are generic too: the ideal op-amp and
+//!   macro-models whose parameters are their design targets themselves
+//!   (open-loop gain, gain-bandwidth, slew rate, input and output
+//!   resistance, output headroom), because the macro-model's equations take
+//!   them directly (see [`crate::models::OpAmpModel`]).
 
-use crate::models::{BjtModel, DiodeModel, JfetModel, Polarity};
+use crate::models::{BjtModel, DiodeModel, JfetModel, OpAmpKind, OpAmpModel, Polarity};
 
 /// Metadata shared by all library entries (shown by the model browser, Q144).
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +58,10 @@ const PNP_SMALL: &[&str] = &["Transistors", "Bipolar", "PNP", "Small signal"];
 const PNP_POWER: &[&str] = &["Transistors", "Bipolar", "PNP", "Power"];
 const NJF: &[&str] = &["Transistors", "JFET", "N-channel"];
 const PJF: &[&str] = &["Transistors", "JFET", "P-channel"];
+const OA_IDEAL: &[&str] = &["Op-amps", "Ideal"];
+const OA_GENERAL: &[&str] = &["Op-amps", "General purpose"];
+const OA_FAST: &[&str] = &["Op-amps", "Fast"];
+const OA_RRIO: &[&str] = &["Op-amps", "Rail-to-rail"];
 
 /// Manufacturer of every built-in model.
 const GENERIC: &str = "Generic";
@@ -734,4 +743,91 @@ pub fn default_jfet(polarity: Polarity) -> &'static str {
         Polarity::N => "NJF_MID",
         Polarity::P => "PJF_MID",
     }
+}
+
+/// An op-amp macro-model from its targets: `[aol, gbw (Hz), slew (V/s)]`,
+/// `[rin, rout]` (Ω) and the headroom on each side (V).
+fn macro_model(name: &str, dynamics: [f64; 3], resistances: [f64; 2], headroom: f64) -> OpAmpModel {
+    let [aol, gbw, slew] = dynamics;
+    let [rin, rout] = resistances;
+    OpAmpModel {
+        name: name.into(),
+        kind: OpAmpKind::Macro,
+        aol,
+        gbw,
+        slew,
+        rin,
+        rout,
+        headroom_pos: headroom,
+        headroom_neg: headroom,
+    }
+}
+
+/// Op-amps (D26): the ideal op-amp and generic single-pole macro-models.
+pub fn opamps() -> Vec<ModelEntry<OpAmpModel>> {
+    vec![
+        entry(
+            OpAmpModel {
+                name: "OA_IDEAL".into(),
+                kind: OpAmpKind::Ideal,
+                aol: 1e6,
+                gbw: f64::INFINITY,
+                slew: f64::INFINITY,
+                rin: f64::INFINITY,
+                rout: 1e-3,
+                headroom_pos: 0.0,
+                headroom_neg: 0.0,
+            },
+            OA_IDEAL,
+            "Generic ideal op-amp",
+            "xsim generic model (D13): ideal op-amp with open-loop gain 10⁶ (120 dB; high \
+             enough that a gain-of-100 stage is within 10⁻⁴ of its ideal gain, low enough \
+             that the equations keep six significant digits), infinite bandwidth and slew \
+             rate, no input current, 1 mΩ output resistance and the output limited exactly \
+             to the supply rails; not a model of any specific part",
+        ),
+        entry(
+            macro_model("OA_GP", [1e5, 1e6, 0.5e6], [2e6, 75.0], 1.5),
+            OA_GENERAL,
+            "Generic general-purpose op-amp, 1 MHz",
+            "xsim generic model (D13): single-pole macro-model with open-loop gain 100 dB \
+             (AOL = 10⁵), unity-gain crossing at GBW = 1 MHz (open-loop pole 10 Hz), slew \
+             rate 0.5 V/µs (slewing above about 80 mV of error, SLEW/(2π·GBW)), RIN = 2 MΩ, \
+             ROUT = 75 Ω, output swing to 1.5 V from each rail; not a model of any specific \
+             part",
+        ),
+        entry(
+            macro_model("OA_FAST", [1e5, 10e6, 10e6], [1e6, 50.0], 1.5),
+            OA_FAST,
+            "Generic fast op-amp, 10 MHz",
+            "xsim generic model (D13): single-pole macro-model with open-loop gain 100 dB \
+             (AOL = 10⁵), unity-gain crossing at GBW = 10 MHz (open-loop pole 100 Hz), slew \
+             rate 10 V/µs (slewing above about 160 mV of error), RIN = 1 MΩ, ROUT = 50 Ω, \
+             output swing to 1.5 V from each rail; not a model of any specific part",
+        ),
+        entry(
+            macro_model("OA_RRIO", [3.16e5, 3e6, 2e6], [10e6, 30.0], 0.05),
+            OA_RRIO,
+            "Generic rail-to-rail op-amp, 3 MHz",
+            "xsim generic model (D13): single-pole macro-model with open-loop gain 110 dB \
+             (AOL = 3.16·10⁵), unity-gain crossing at GBW = 3 MHz (open-loop pole 9.5 Hz), \
+             slew rate 2 V/µs (slewing above about 110 mV of error), RIN = 10 MΩ, ROUT = \
+             30 Ω, rail-to-rail output swinging to 50 mV from each rail; the input stage \
+             is not modelled, so any common-mode voltage works; not a model of any \
+             specific part",
+        ),
+    ]
+}
+
+/// Op-amp model by exact name.
+pub fn opamp(name: &str) -> Option<OpAmpModel> {
+    opamps()
+        .into_iter()
+        .find(|e| e.model.name == name)
+        .map(|e| e.model)
+}
+
+/// Default op-amp model of a newly placed op-amp.
+pub fn default_opamp() -> &'static str {
+    "OA_GP"
 }

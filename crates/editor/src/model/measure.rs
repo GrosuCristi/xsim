@@ -2,12 +2,15 @@
 //!
 //! * Voltage across the part: pin 1 − pin 2 for two-terminal parts and
 //!   switches (P − N), collector − emitter for BJTs, drain − source for
-//!   JFETs.
+//!   JFETs, and the output to ground for an op-amp (D26).
 //! * Current through the part: the current into its first terminal (`I`,
-//!   `Ic`, `Id`; `I(S1)` and `I(W1)` into a switch's P).
+//!   `Ic`, `Id`; `I(S1)` and `I(W1)` into a switch's P), and into the
+//!   output of an op-amp (`Io`, negative while it sources current).
 //! * Power: `P = Σ V_k · I_k` over the terminals (current into terminal `k`),
 //!   so a positive value is dissipated and a negative one delivered. The
-//!   control inputs C+ and C− of a voltage switch draw no current.
+//!   control inputs C+ and C− of a voltage switch draw no current. For an
+//!   op-amp the sum runs over all five terminals: what it draws from its
+//!   supplies less what it delivers at its output, i.e. its dissipation.
 //!
 //! Transient results report time-weighted RMS voltage and current and the
 //! average power over the whole run; an operating point reports its values.
@@ -69,8 +72,14 @@ pub fn measure(
     let insulated = insulated_terminals(component.part.kind());
     let currents = terminal_currents(result, &element.name, prefixes, insulated, terminals);
     let (across, labels) = across_terminals(component.part.kind());
-    let voltage = difference(&voltages[across.0], &voltages[across.1]);
-    let current = currents.first().cloned().flatten();
+    let voltage = match across.1 {
+        Some(minus) => difference(&voltages[across.0], &voltages[minus]),
+        None => voltages[across.0].clone(),
+    };
+    let current = currents
+        .get(current_terminal(component.part.kind()))
+        .cloned()
+        .flatten();
     // Insulated terminals add nothing to the power, whatever their voltage.
     let carrying = |values: &[Option<Vec<f64>>]| -> Vec<Option<Vec<f64>>> {
         values
@@ -102,13 +111,13 @@ pub fn measure(
     })
 }
 
-/// Terminals the voltage is measured across and the labels of the values.
-/// A switch, like any two-terminal part, is measured across its switch
-/// path P–N.
-fn across_terminals(kind: PartKind) -> ((usize, usize), (&'static str, &'static str)) {
+/// Terminals the voltage is measured across (the second `None` for
+/// ground) and the labels of the values. A switch, like any two-terminal
+/// part, is measured across its switch path P–N; an op-amp at its output.
+fn across_terminals(kind: PartKind) -> ((usize, Option<usize>), (&'static str, &'static str)) {
     match kind {
-        PartKind::NpnBjt | PartKind::PnpBjt => ((0, 2), ("V_CE", "Ic")),
-        PartKind::NJfet | PartKind::PJfet => ((0, 2), ("V_DS", "Id")),
+        PartKind::NpnBjt | PartKind::PnpBjt => ((0, Some(2)), ("V_CE", "Ic")),
+        PartKind::NJfet | PartKind::PJfet => ((0, Some(2)), ("V_DS", "Id")),
         PartKind::Resistor
         | PartKind::Capacitor
         | PartKind::Inductor
@@ -117,7 +126,17 @@ fn across_terminals(kind: PartKind) -> ((usize, usize), (&'static str, &'static 
         | PartKind::Diode
         | PartKind::VoltageSwitch
         | PartKind::CurrentSwitch
-        | PartKind::Ground => ((0, 1), ("V", "I")),
+        | PartKind::Ground => ((0, Some(1)), ("V", "I")),
+        PartKind::OpAmp => ((2, None), ("V_OUT", "Io")),
+    }
+}
+
+/// The terminal whose current the card shows: the output of an op-amp,
+/// the first terminal of every other part.
+fn current_terminal(kind: PartKind) -> usize {
+    match kind {
+        PartKind::OpAmp => 2,
+        _ => 0,
     }
 }
 

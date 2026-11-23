@@ -40,6 +40,7 @@ pub(super) fn listed_noun(filter: LibraryFilter) -> &'static str {
         LibraryFilter::Bjts(P) => "PNP transistors",
         LibraryFilter::Jfets(N) => "N-channel JFETs",
         LibraryFilter::Jfets(P) => "P-channel JFETs",
+        LibraryFilter::OpAmps => "op-amps",
     }
 }
 
@@ -53,6 +54,7 @@ pub(super) fn root_label(filter: LibraryFilter) -> &'static str {
         LibraryFilter::Bjts(P) => "All PNP transistors",
         LibraryFilter::Jfets(N) => "All N-channel JFETs",
         LibraryFilter::Jfets(P) => "All P-channel JFETs",
+        LibraryFilter::OpAmps => "All op-amps",
     }
 }
 
@@ -241,6 +243,7 @@ mod tests {
             LibraryFilter::Bjts(Polarity::P),
             LibraryFilter::Jfets(Polarity::N),
             LibraryFilter::Jfets(Polarity::P),
+            LibraryFilter::OpAmps,
         ];
         for filter in filters {
             assert_eq!(

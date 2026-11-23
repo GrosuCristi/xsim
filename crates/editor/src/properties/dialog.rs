@@ -46,8 +46,10 @@ enum Reserved {
     /// A source's PWL table with [`RESERVED_PWL_POINTS`] points more than
     /// it shows once chosen.
     MorePwlPoints,
-    /// A semiconductor showing the model of its family whose description
-    /// is the longest, as when it is picked from the library.
+    /// A semiconductor or op-amp showing the model of its family whose
+    /// description is the longest, as when it is picked from the library.
+    /// Every op-amp model lists the same parameters, one per row, so only
+    /// the description changes the height.
     LongestModel,
 }
 
@@ -73,7 +75,9 @@ fn reserved_states(part: &Part, read_only: bool) -> Vec<Reserved> {
                 .chain([Reserved::MorePwlPoints])
                 .collect()
         }
-        Part::Diode { .. } | Part::Bjt { .. } | Part::Jfet { .. } => vec![Reserved::LongestModel],
+        Part::Diode { .. } | Part::Bjt { .. } | Part::Jfet { .. } | Part::OpAmp { .. } => {
+            vec![Reserved::LongestModel]
+        }
         _ => Vec::new(),
     }
 }
@@ -105,6 +109,9 @@ fn longest_model(part: &Part) -> Option<LibraryItem> {
             model: longest(library::jfets(), |model| model.polarity == *polarity)?
                 .model
                 .name,
+        },
+        Part::OpAmp { .. } => Part::OpAmp {
+            model: longest(library::opamps(), |_| true)?.model.name,
         },
         _ => return None,
     };

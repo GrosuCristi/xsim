@@ -19,7 +19,12 @@ fn toolbar_selector(kind: PartKind) -> &'static str {
         PartKind::NpnBjt => "toolbar-part-q",
         PartKind::PnpBjt => "toolbar-part-qp",
         PartKind::Ground => "toolbar-part-gnd",
-        PartKind::NJfet | PartKind::PJfet | PartKind::VoltageSwitch | PartKind::CurrentSwitch => {
+        // Placed from the library only (D6, D17, D26).
+        PartKind::NJfet
+        | PartKind::PJfet
+        | PartKind::VoltageSwitch
+        | PartKind::CurrentSwitch
+        | PartKind::OpAmp => {
             unreachable!("{kind:?} comes from the library (D6)")
         }
     }

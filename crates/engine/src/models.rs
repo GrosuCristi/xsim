@@ -1,5 +1,6 @@
-//! Semiconductor and switch model parameters (voltage- and
-//! current-controlled switches: [`SwitchModel`], [`CurrentSwitchModel`]).
+//! Semiconductor, switch and op-amp model parameters (voltage- and
+//! current-controlled switches: [`SwitchModel`], [`CurrentSwitchModel`];
+//! op-amps: [`OpAmpModel`]).
 //!
 //! Parameter names follow the classic Berkeley SPICE models so manufacturer
 //! model cards translate one-to-one. Defaults are the SPICE defaults. All
@@ -534,6 +535,79 @@ impl Default for CurrentSwitchModel {
             roff: 1e9,
             it: 0.0,
             ih: 0.0,
+        }
+    }
+}
+
+/// Which op-amp model [`OpAmpModel`] describes (D26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum OpAmpKind {
+    /// Very high gain and infinite bandwidth; the output is limited to the
+    /// supply rails. Uses `aol` and `rout` only.
+    Ideal,
+    /// Single-pole macro-model: open-loop gain, gain-bandwidth pole, slew
+    /// rate, output limited to the rails minus headroom, input and output
+    /// resistance.
+    #[default]
+    Macro,
+}
+
+/// Op-amp model (D26) of [`crate::Device::OpAmp`]. The equations are in
+/// the documentation of the device (`devices/opamp.rs`); in short, with
+/// `vd = V(+) − V(−)`:
+///
+/// * **Ideal:** the output is `T(aol·vd)` behind `rout`, where `T` limits
+///   smoothly to the supply rails exactly (no headroom). No input current;
+///   `gbw`, `slew`, `rin` and the headrooms are ignored.
+/// * **Macro:** an internal state `x` follows `τ·dx/dt = L·tanh(e/L)` with
+///   `e = aol·vd − x` (plus a clamp that keeps `x` just beyond the output
+///   range), `τ = aol/(2π·gbw)` and `L = slew·τ`: one pole at `gbw/aol`
+///   in small signal and a slope of exactly `slew` in large signal. The
+///   output is `T(x)` behind `rout`, limited to
+///   `[V− + headroom_neg, V+ − headroom_pos]`; `rin` joins the inputs.
+///
+/// The output current is drawn from V+ while sourcing and returned to V−
+/// while sinking; there is no quiescent current.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpAmpModel {
+    pub name: String,
+    pub kind: OpAmpKind,
+    /// Open-loop DC gain (V/V).
+    #[serde(with = "number")]
+    pub aol: f64,
+    /// Gain-bandwidth product (Hz); the open-loop pole is at `gbw/aol`.
+    #[serde(with = "number")]
+    pub gbw: f64,
+    /// Slew rate (V/s).
+    #[serde(with = "number")]
+    pub slew: f64,
+    /// Differential input resistance (Ω).
+    #[serde(with = "number")]
+    pub rin: f64,
+    /// Output resistance (Ω).
+    #[serde(with = "number")]
+    pub rout: f64,
+    /// How far below V+ and above V− the output limits (V).
+    #[serde(with = "number")]
+    pub headroom_pos: f64,
+    #[serde(with = "number")]
+    pub headroom_neg: f64,
+}
+
+impl Default for OpAmpModel {
+    /// The general-purpose macro-model of the library (`OA_GP`).
+    fn default() -> Self {
+        Self {
+            name: "OA_GP".into(),
+            kind: OpAmpKind::Macro,
+            aol: 1e5,
+            gbw: 1e6,
+            slew: 0.5e6,
+            rin: 2e6,
+            rout: 75.0,
+            headroom_pos: 1.5,
+            headroom_neg: 1.5,
         }
     }
 }

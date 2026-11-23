@@ -132,8 +132,13 @@ pub fn place_action(kind: PartKind) -> Option<Box<dyn gpui_kit::Action>> {
         PartKind::NpnBjt => Box::new(PlaceNpn),
         PartKind::PnpBjt => Box::new(PlacePnp),
         PartKind::Ground => Box::new(PlaceGround),
-        // Placed from the component library only, not the toolbar (D6).
-        PartKind::NJfet | PartKind::PJfet | PartKind::VoltageSwitch | PartKind::CurrentSwitch => {
+        // Placed from the component library only, not the toolbar (D6,
+        // D17, D26).
+        PartKind::NJfet
+        | PartKind::PJfet
+        | PartKind::VoltageSwitch
+        | PartKind::CurrentSwitch
+        | PartKind::OpAmp => {
             return None;
         }
     };

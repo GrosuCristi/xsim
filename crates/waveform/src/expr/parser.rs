@@ -446,6 +446,19 @@ mod tests {
                 position: 0,
             }
         );
+        // Op-amp terminals (D26).
+        for prefix in ["Ip", "In", "Io", "Isp", "Isn"] {
+            assert_eq!(
+                parse(&format!("{prefix}(U1)")).unwrap(),
+                Node::Probe {
+                    probe: Probe::Current {
+                        prefix,
+                        element: "U1".into(),
+                    },
+                    position: 0,
+                }
+            );
+        }
     }
 
     #[test]

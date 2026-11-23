@@ -6,7 +6,7 @@ use super::parameters::{self, Parameter};
 use super::{LibraryFilter, LibraryItem};
 use xsim_project::{Part, PartKind};
 use xsim_spice_engine::{
-    BjtModel, DiodeModel, JfetModel, Polarity,
+    BjtModel, DiodeModel, JfetModel, OpAmpModel, Polarity,
     library::{self, ModelEntry},
     units::format_value,
 };
@@ -23,6 +23,8 @@ pub(crate) const DIODES: &str = "Diodes";
 pub(crate) const BJTS: &str = "Bipolar transistors";
 /// Tree label of the JFET models.
 pub(crate) const JFETS: &str = "JFETs";
+/// Tree label of the op-amp models (D26).
+pub(crate) const OPAMPS: &str = "Op-amps";
 
 /// One part or model of the library.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,9 +52,17 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
-    /// The basic parts and the built-in model library.
+    /// The basic parts and the built-in model library, the op-amps (D26)
+    /// last.
     pub(crate) fn builtin() -> Self {
         Self::from_models(&library::diodes(), &library::bjts(), &library::jfets())
+            .with_opamps(&library::opamps())
+    }
+
+    /// The catalog with `opamps` appended, sorted by category and name.
+    pub(crate) fn with_opamps(mut self, opamps: &[ModelEntry<OpAmpModel>]) -> Self {
+        self.entries.extend(sorted(opamps.iter().map(opamp_entry)));
+        self
     }
 
     /// The basic parts followed by the given models, each family sorted by
@@ -199,7 +209,12 @@ fn default_parameters(part: &Part) -> Vec<Parameter> {
             ("IT", format_value(model.it, "A")),
             ("IH", format_value(model.ih, "A")),
         ],
-        Part::Diode { .. } | Part::Bjt { .. } | Part::Jfet { .. } | Part::Ground => Vec::new(),
+        // Model parts list their model's parameters instead (`model_entry`).
+        Part::Diode { .. }
+        | Part::Bjt { .. }
+        | Part::Jfet { .. }
+        | Part::OpAmp { .. }
+        | Part::Ground => Vec::new(),
     }
 }
 
@@ -213,7 +228,8 @@ fn model_entry<M>(
     let name = match &item {
         LibraryItem::Diode { model }
         | LibraryItem::Bjt { model, .. }
-        | LibraryItem::Jfet { model, .. } => model.clone(),
+        | LibraryItem::Jfet { model, .. }
+        | LibraryItem::OpAmp { model } => model.clone(),
         LibraryItem::Part(kind) => kind.label().into(),
     };
     CatalogEntry {
@@ -263,6 +279,17 @@ fn jfet_entry(entry: &ModelEntry<JfetModel>) -> CatalogEntry {
         model: entry.model.name.clone(),
     };
     model_entry(entry, item, kind, path, parameters::jfet(&entry.model))
+}
+
+/// An op-amp model (D26), filed under "Op-amps" and its library category
+/// (Ideal, General purpose, Fast, Rail-to-rail).
+fn opamp_entry(entry: &ModelEntry<OpAmpModel>) -> CatalogEntry {
+    let path = categories::model_path(&[OPAMPS], entry.category);
+    let item = LibraryItem::OpAmp {
+        model: entry.model.name.clone(),
+    };
+    let parameters = parameters::opamp(&entry.model);
+    model_entry(entry, item, PartKind::OpAmp, path, parameters)
 }
 
 #[cfg(test)]
@@ -514,8 +541,68 @@ mod tests {
                 polarity: Polarity::N,
                 model: library::default_jfet(Polarity::N).into(),
             },
+            LibraryItem::OpAmp {
+                model: library::default_opamp().into(),
+            },
         ] {
             assert!(catalog.find(&item).is_some(), "{item:?}");
         }
+    }
+
+    /// D26: the four generic op-amps come last, under "Op-amps" and their
+    /// library category, each with its metadata and parameters, and place
+    /// an op-amp using that model. No toolbar part lists them.
+    #[test]
+    fn opamps_have_their_own_category_with_their_metadata() {
+        let catalog = Catalog::builtin();
+        let opamps: Vec<&CatalogEntry> = catalog
+            .entries()
+            .iter()
+            .filter(|e| e.kind == PartKind::OpAmp)
+            .collect();
+        let listed: Vec<(&str, Vec<&str>)> = opamps
+            .iter()
+            .map(|e| (e.name.as_str(), e.path.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("OA_FAST", vec![OPAMPS, "Fast"]),
+                ("OA_GP", vec![OPAMPS, "General purpose"]),
+                ("OA_IDEAL", vec![OPAMPS, "Ideal"]),
+                ("OA_RRIO", vec![OPAMPS, "Rail-to-rail"]),
+            ]
+        );
+        let last = catalog.entries().len() - opamps.len();
+        assert!(
+            catalog.entries()[last..]
+                .iter()
+                .all(|e| e.kind == PartKind::OpAmp),
+            "the op-amps are the last family"
+        );
+        for entry in &opamps {
+            let model = library::opamp(&entry.name).expect("a library model");
+            assert_eq!(
+                entry.item.to_part(),
+                Part::OpAmp {
+                    model: model.name.clone()
+                }
+            );
+            assert_eq!(entry.parameters, parameters::opamp(&model));
+            assert!(entry.provenance.starts_with("xsim generic model (D13)"));
+            assert!(!entry.description.is_empty());
+            assert!(LibraryFilter::OpAmps.admits(&entry.item));
+        }
+        assert_eq!(
+            Catalog::builtin()
+                .restricted(LibraryFilter::OpAmps)
+                .entries()
+                .len(),
+            4
+        );
+        assert!(
+            catalog.find(&LibraryItem::Part(PartKind::OpAmp)).is_none(),
+            "an op-amp is always placed with a model"
+        );
     }
 }

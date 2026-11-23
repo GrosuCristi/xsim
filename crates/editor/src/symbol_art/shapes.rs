@@ -81,7 +81,38 @@ fn designed(kind: PartKind) -> Vec<Shape> {
         PartKind::VoltageSwitch => voltage_switch(),
         PartKind::CurrentSwitch => current_switch(),
         PartKind::Ground => ground(),
+        PartKind::OpAmp => opamp(),
     }
+}
+
+/// The op-amp (D26): a triangle pointing right, its output lead leaving the
+/// apex. The inputs enter the left side, the inverting one on top, each
+/// marked inside the triangle (`−` beside `−`, `+` beside `+`); the supply
+/// leads V+ (top) and V− (bottom) run vertically onto the slanted sides.
+/// Design coordinates: `+ (−2, 1)`, `− (−2, −1)`, `OUT (2, 0)`,
+/// `V+ (0, −2)`, `V− (0, 2)`; the sides cross x = 0 at y = ∓0.75.
+fn opamp() -> Vec<Shape> {
+    vec![
+        Shape::Line(vec![
+            v(-1.5, -1.5),
+            v(1.5, 0.0),
+            v(-1.5, 1.5),
+            v(-1.5, -1.5),
+        ]),
+        Shape::Line(vec![v(-2.0, 1.0), v(-1.5, 1.0)]),
+        Shape::Line(vec![v(-2.0, -1.0), v(-1.5, -1.0)]),
+        Shape::Line(vec![v(2.0, 0.0), v(1.5, 0.0)]),
+        Shape::Line(vec![v(0.0, -2.0), v(0.0, -0.75)]),
+        Shape::Line(vec![v(0.0, 2.0), v(0.0, 0.75)]),
+        Shape::Sign {
+            at: v(-1.1, 1.0),
+            plus: true,
+        },
+        Shape::Sign {
+            at: v(-1.1, -1.0),
+            plus: false,
+        },
+    ]
 }
 
 /// The point of the segment `a`–`b` at height `y` (the segment must not be
@@ -431,6 +462,94 @@ mod tests {
                 .any(|s| matches!(s, Shape::Fill(_))),
             "the current switch has its arrow"
         );
+    }
+
+    /// D26: the op-amp's art stays inside its body box; each of its five
+    /// pins has exactly one lead, starting on the pin and running into the
+    /// body; the supply leads end on the triangle's sides; the inputs are
+    /// marked `+` beside the `+` pin and `−` beside the `−` pin; and the
+    /// output lead leaves the apex.
+    #[test]
+    fn the_opamp_symbol_fits_its_body_and_marks_its_inputs() {
+        let kind = PartKind::OpAmp;
+        let g = symbols::geometry(kind);
+        let art = shapes(kind);
+        let body = Rect::from_corners(Vec2::from_grid(g.body_min), Vec2::from_grid(g.body_max));
+        let drawn = extent(&art).expect("the symbol has artwork");
+        assert!(
+            body.inflate(1e-4, 1e-4).contains_rect(drawn),
+            "{drawn:?} leaves the body {body:?}"
+        );
+        let centre = body.center();
+        let mut inner_ends = Vec::new();
+        for &pin in g.pins {
+            let target = Vec2::from_grid(pin);
+            let leads: Vec<&Vec<Vec2>> = art
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Line(points) if points.first() == Some(&target) => Some(points),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(leads.len(), 1, "pin {pin:?}");
+            assert_eq!(leads[0].len(), 2, "pin {pin:?}: a straight lead");
+            assert!(
+                leads[0][1].distance(centre) < target.distance(centre),
+                "the lead of pin {pin:?} points away from the body"
+            );
+            inner_ends.push(leads[0][1]);
+        }
+        // The triangle: apex at the output lead's inner end, and the
+        // supply leads end on its slanted sides.
+        let triangle = art
+            .iter()
+            .find_map(|s| match s {
+                Shape::Line(points) if points.len() == 4 => Some(points.clone()),
+                _ => None,
+            })
+            .expect("a closed triangle");
+        assert_eq!(triangle.first(), triangle.last(), "closed");
+        assert!(
+            triangle.contains(&inner_ends[2]),
+            "the output leaves the apex"
+        );
+        let apex = inner_ends[2];
+        let back = triangle[0].x;
+        for supply in [inner_ends[3], inner_ends[4]] {
+            let corner = triangle
+                .iter()
+                .copied()
+                .find(|p| p.x == back && (p.y < 0.0) == (supply.y < 0.0))
+                .expect("a back corner on the supply's side");
+            let along = (supply.x - corner.x) / (apex.x - corner.x);
+            let expected = corner + (apex - corner) * along;
+            assert!(
+                supply.distance(expected) < 1e-5,
+                "the supply lead ends on the side: {supply:?} vs {expected:?}"
+            );
+        }
+        for input in [inner_ends[0], inner_ends[1]] {
+            assert!((input.x - back).abs() < 1e-5, "inputs enter the back side");
+        }
+        let signs: Vec<(Vec2, bool)> = art
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Sign { at, plus } => Some((*at, *plus)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(signs.len(), 2, "{signs:?}");
+        let (plus_pin, minus_pin) = (Vec2::from_grid(g.pins[0]), Vec2::from_grid(g.pins[1]));
+        assert_eq!((g.pin_names[0], g.pin_names[1]), ("+", "−"));
+        for (at, plus) in signs {
+            let (own, other) = if plus {
+                (plus_pin, minus_pin)
+            } else {
+                (minus_pin, plus_pin)
+            };
+            assert!(at.distance(own) < at.distance(other), "{at:?} {plus}");
+            assert!(at.x > back, "the marks sit inside the triangle");
+        }
     }
 
     #[test]

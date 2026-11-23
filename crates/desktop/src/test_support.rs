@@ -383,6 +383,56 @@ pub fn switch_project() -> Project {
     project
 }
 
+/// Where the op-amp of [`opamp_project`] sits.
+pub const OPAMP_AT: (i32, i32) = (0, 0);
+
+/// D26: a non-inverting amplifier of gain 10 with the general-purpose
+/// op-amp `OA_GP` on ±15 V rails, set to the operating point: `Vin` (1 V)
+/// into `+`, `Rf` 9 kΩ from `out` to `fb` (`−`), `Rg` 1 kΩ from `fb` to
+/// ground and a 2 kΩ load `RL`, every pin joined to its net by a label.
+pub fn opamp_project() -> Project {
+    let r = |resistance| Part::Resistor { resistance };
+    let dc = |volts| Part::VoltageSource {
+        source: Source::dc(volts),
+    };
+    let parts: [SwitchBenchPart; 7] = [
+        (
+            "U1",
+            OPAMP_AT,
+            0,
+            Part::OpAmp {
+                model: "OA_GP".into(),
+            },
+            &["in", "fb", "out", "vp", "vn"],
+        ),
+        ("Vin", (-24, 16), 0, dc(1.0), &["in", "0"]),
+        ("Vp", (-24, -16), 0, dc(15.0), &["vp", "0"]),
+        ("Vn", (0, -16), 0, dc(-15.0), &["vn", "0"]),
+        ("Rf", (24, -16), 0, r(9e3), &["out", "fb"]),
+        ("Rg", (24, 16), 0, r(1e3), &["fb", "0"]),
+        ("RL", (0, 16), 0, r(2e3), &["out", "0"]),
+    ];
+    let mut schematic = Schematic::default();
+    for (name, position, rotation, part, nets) in parts {
+        let id = schematic.allocate_id();
+        let c = component(id, name, position, rotation, part);
+        for (pin, net) in c.pins().into_iter().zip(nets) {
+            let id = schematic.allocate_id();
+            schematic.labels.push(NetLabel {
+                id,
+                name: net.to_string(),
+                position: pin,
+            });
+        }
+        schematic.components.push(c);
+    }
+    let mut project = Project::new("Amplifier");
+    let circuit = &mut project.circuits[0];
+    circuit.schematic = schematic;
+    circuit.simulation.selected = xsim_project::AnalysisChoice::OperatingPoint;
+    project
+}
+
 /// D15: a 1 V source driving two 1 µF capacitors in series to ground. Their
 /// junction, labelled `mid`, has no DC path to ground.
 pub fn series_capacitor_project() -> Project {

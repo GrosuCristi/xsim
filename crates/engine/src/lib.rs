@@ -55,7 +55,10 @@ pub use analysis::{
 pub use circuit::{Circuit, Device, Element, GROUND, NodeIndex};
 pub use control::SimControl;
 pub use error::{CircuitError, FailurePoint, SimError};
-pub use models::{BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, Polarity, SwitchModel};
+pub use models::{
+    BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, OpAmpKind, OpAmpModel, Polarity,
+    SwitchModel,
+};
 pub use result::{
     AnalysisKind, Axis, Quantity, Signal, SignalData, SignalOrigin, SimulationResult,
 };

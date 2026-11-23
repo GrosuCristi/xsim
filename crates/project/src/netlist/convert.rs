@@ -125,7 +125,8 @@ fn check_ground(topology: &Topology, parts: &[(usize, &Component)]) -> Result<()
 }
 
 /// The engine device of a part; `None` for ground symbols. Semiconductor
-/// models are looked up by exact name and must match the part's polarity.
+/// and op-amp models are looked up by exact name; semiconductor models must
+/// match the part's polarity.
 /// A current switch's control must be the exact designator of one of
 /// `sources`, the schematic's voltage sources; the element of that
 /// designator is its control in the circuit.
@@ -180,6 +181,9 @@ fn device(component: &Component, sources: &BTreeSet<&str>) -> Result<Option<Devi
                 model: model.clone(),
             }
         }
+        Part::OpAmp { model } => Device::OpAmp {
+            model: library::opamp(model).ok_or_else(|| unknown(model))?,
+        },
         Part::Ground => return Ok(None),
     };
     Ok(Some(device))

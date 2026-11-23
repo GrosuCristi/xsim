@@ -16,6 +16,7 @@
 mod bjt;
 mod diode;
 mod jfet;
+mod opamp;
 mod passive;
 pub(crate) mod semiconductor;
 mod sources;
@@ -504,5 +505,6 @@ pub(crate) fn build(
                 .position(|e| e.name == *control && matches!(e.device, Device::VoltageSource(_)));
             Box::new(switch::Switch::current(nodes, source, model))
         }
+        Device::OpAmp { model } => Box::new(opamp::OpAmp::new(nodes, model)),
     }
 }

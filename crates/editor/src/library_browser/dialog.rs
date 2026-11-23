@@ -23,6 +23,7 @@ fn title(filter: LibraryFilter) -> &'static str {
         LibraryFilter::Bjts(P) => "Choose PNP Transistor Model",
         LibraryFilter::Jfets(N) => "Choose N-Channel JFET Model",
         LibraryFilter::Jfets(P) => "Choose P-Channel JFET Model",
+        LibraryFilter::OpAmps => "Choose Op-amp Model",
     }
 }
 

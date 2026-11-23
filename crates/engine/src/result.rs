@@ -59,8 +59,9 @@ impl SignalData {
 }
 
 /// One recorded quantity. Names: `V(node)` for node voltages, `I(name)` for
-/// two-terminal element currents, `Ic(Q1)`/`Ib(Q1)`/`Ie(Q1)` for BJT and
-/// `Id(J1)`/`Ig(J1)`/`Is(J1)` for JFET terminal currents.
+/// two-terminal element currents, `Ic(Q1)`/`Ib(Q1)`/`Ie(Q1)` for BJT,
+/// `Id(J1)`/`Ig(J1)`/`Is(J1)` for JFET and `Ip(U1)`/`In(U1)`/`Io(U1)`/
+/// `Isp(U1)`/`Isn(U1)` for op-amp terminal currents.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Signal {
     pub name: String,

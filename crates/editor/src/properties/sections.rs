@@ -296,7 +296,8 @@ impl PropertiesView {
         ]
     }
 
-    /// The chosen model with its library description and a Choose button.
+    /// The chosen model with its library description and a Choose button;
+    /// for an op-amp also its parameters, read-only (D26).
     pub(super) fn model_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.form.has_model() {
             return None;
@@ -353,7 +354,17 @@ impl PropertiesView {
                     .debug_selector(|| "choose-model".into())
                     .on_click(cx.listener(|this, _, window, cx| this.choose_model(window, cx))),
             );
-        Some(section("Model", cx).child(card).into_any_element())
+        let parameters = self
+            .model
+            .as_ref()
+            .filter(|_| self.form.shows_model_parameters())
+            .map(|summary| model_parameters(&summary.parameters, cx));
+        Some(
+            section("Model", cx)
+                .child(card)
+                .children(parameters)
+                .into_any_element(),
+        )
     }
 
     pub(super) fn ground_note(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -365,4 +376,39 @@ impl PropertiesView {
                 .into_any_element()
         })
     }
+}
+
+/// Width in rems of the label column of a model's parameter list.
+const PARAMETER_LABEL_WIDTH: f32 = 6.5;
+
+/// The model's parameters as a read-only list, one per row, so its height
+/// depends only on how many there are (D24): every op-amp model has the
+/// same rows.
+fn model_parameters(parameters: &[(&'static str, String)], cx: &App) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    v_flex()
+        .gap_0p5()
+        .px_3()
+        .text_sm()
+        .debug_selector(|| "model-parameters".into())
+        .children(parameters.iter().map(|(label, value)| {
+            h_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .w(rems(PARAMETER_LABEL_WIDTH))
+                        .flex_shrink_0()
+                        .text_color(muted)
+                        .child(*label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .debug_selector(move || format!("model-parameter-{label}"))
+                        .child(value.clone()),
+                )
+        }))
+        .into_any_element()
 }

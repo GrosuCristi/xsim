@@ -10,7 +10,9 @@
 //! (clamped to `rb`) and `fc ≥ 1` (clamped to 0.95).
 
 use crate::error::CircuitError;
-use crate::models::{BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, SwitchModel};
+use crate::models::{
+    BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, OpAmpKind, OpAmpModel, SwitchModel,
+};
 
 /// Absolute zero in °C.
 const ABSOLUTE_ZERO: f64 = -273.15;
@@ -209,4 +211,28 @@ pub(super) fn current_switch(element: &str, m: &CurrentSwitchModel) -> Result<()
     };
     c.positive(&[("RON", m.ron), ("ROFF", m.roff)])?;
     c.finite(&[("IT", m.it), ("IH", m.ih)])
+}
+
+/// Op-amp (D26): positive finite gain and output resistance and finite,
+/// non-negative headrooms; the macro-model also needs a positive finite
+/// gain-bandwidth, slew rate and input resistance. The ideal model ignores
+/// those three (its input draws no current and its bandwidth is infinite),
+/// so they may be `+∞` there; its `rin` must still be positive. It ignores
+/// the headrooms too, which are checked so the model stays valid when it is
+/// switched to a macro-model.
+pub(super) fn opamp(element: &str, m: &OpAmpModel) -> Result<(), CircuitError> {
+    let c = Checker {
+        element,
+        model: &m.name,
+    };
+    c.positive(&[("AOL", m.aol), ("ROUT", m.rout)])?;
+    c.non_negative(&[
+        ("HEADROOM_POS", m.headroom_pos),
+        ("HEADROOM_NEG", m.headroom_neg),
+    ])?;
+    match m.kind {
+        // `v > 0.0` is false for NaN.
+        OpAmpKind::Ideal => c.ensure(m.rin > 0.0, "RIN", "positive or infinite", m.rin),
+        OpAmpKind::Macro => c.positive(&[("GBW", m.gbw), ("SLEW", m.slew), ("RIN", m.rin)]),
+    }
 }

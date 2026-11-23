@@ -11,6 +11,7 @@
 //!            `xsim_spice_engine::units`), e.g. 2, 4.7k, 1e-3, 10m
 //! signal  := V(node) | V(node, node) | I(name) | Ic(name) | Ib(name) | Ie(name)
 //!          | Id(name) | Ig(name) | Is(name)
+//!          | Ip(name) | In(name) | Io(name) | Isp(name) | Isn(name)
 //! variable:= time | freq       (the result's x axis)
 //! call    := func '(' expr (',' expr)* ')'
 //! func    := abs | sqrt | exp | ln | log10 | sin | cos | tan | atan

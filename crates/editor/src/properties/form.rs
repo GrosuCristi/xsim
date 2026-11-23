@@ -114,9 +114,10 @@ impl PartForm {
             Part::VoltageSource { source } | Part::CurrentSource { source } => {
                 self.load_source(source)
             }
-            Part::Diode { model } | Part::Bjt { model, .. } | Part::Jfet { model, .. } => {
-                self.model = model.clone()
-            }
+            Part::Diode { model }
+            | Part::Bjt { model, .. }
+            | Part::Jfet { model, .. }
+            | Part::OpAmp { model } => self.model = model.clone(),
             Part::VoltageSwitch { model } => {
                 self.load_switch(model.ron, model.roff, model.vt, model.vh)
             }
@@ -185,7 +186,8 @@ impl PartForm {
         matches!(self.kind, PartKind::VoltageSource | PartKind::CurrentSource)
     }
 
-    /// Whether the part references a semiconductor model.
+    /// Whether the part references a library model: a semiconductor or an
+    /// op-amp (D26).
     pub(crate) fn has_model(&self) -> bool {
         matches!(
             self.kind,
@@ -194,7 +196,14 @@ impl PartForm {
                 | PartKind::PnpBjt
                 | PartKind::NJfet
                 | PartKind::PJfet
+                | PartKind::OpAmp
         )
+    }
+
+    /// Whether the model card lists the model's parameters (read-only): an
+    /// op-amp's are few and decide how it behaves (D26).
+    pub(crate) fn shows_model_parameters(&self) -> bool {
+        self.kind == PartKind::OpAmp
     }
 
     /// Output unit of a source: amperes for current sources, else volts.

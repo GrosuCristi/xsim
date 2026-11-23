@@ -7,9 +7,9 @@ use crate::diagnostics::{Severity, Source};
 use crate::prompts::UnsavedChoice;
 use crate::simulation::summary::RunStatus;
 use crate::test_support::{
-    TestEnv, click, close, dialog, double_click, has_dialog, init, long_run_project, open, press,
-    press_in_dialog, rc_project, rc_schematic, series_capacitor_project, switch_project,
-    wait_until,
+    OPAMP_AT, TestEnv, click, close, dialog, double_click, has_dialog, init, long_run_project,
+    opamp_project, open, press, press_in_dialog, rc_project, rc_schematic,
+    series_capacitor_project, switch_project, wait_until,
 };
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{Entity, Focusable, TestAppContext, VisualTestContext};
@@ -1812,6 +1812,101 @@ fn both_switches_turn_on_and_off_in_a_run(cx: &mut TestAppContext) {
     for signal in ["I(S1)", "I(W1)"] {
         assert!(plotted.iter().any(|t| t == signal), "{signal}: {plotted:?}");
     }
+    close(&mut window);
+}
+
+/// D26: F5 runs a non-inverting amplifier (OA_GP, gain 10, ±15 V rails) at
+/// its operating point. V(out) is the exact finite-gain value with the
+/// model's input and output resistance, the five terminal currents are
+/// recorded under the op-amp's name, and clicking the op-amp on the
+/// schematic plots `Io(U1)`, its output current.
+#[gpui_kit::test]
+fn a_non_inverting_amplifier_runs_and_probes_its_output_current(cx: &mut TestAppContext) {
+    init(cx);
+    let env = TestEnv::new();
+    let path = env.write_project("amplifier.xsim_proj", &opamp_project());
+    let (workspace, mut window) = open(cx, &env, Some(&path));
+    run_and_wait(&workspace, &mut window);
+    assert!(
+        shown_problems(&workspace, &window).is_empty(),
+        "{:?}",
+        shown_problems(&workspace, &window)
+    );
+    workspace.read_with(&window, |w, _| {
+        assert!(matches!(w.active_tab().status, RunStatus::Finished { .. }));
+        let stored = w.doc.project.circuits[0].result.as_ref().expect("a result");
+        let result = &stored.result;
+        let value = |name: &str| {
+            result
+                .signal(name)
+                .and_then(|s| s.real())
+                .and_then(|v| v.first().copied())
+                .unwrap_or_else(|| panic!("{name} is recorded"))
+        };
+        // Below the limits the macro-model is linear: V(out) = AOL·(V+ − V−)
+        // − ROUT·i, with RIN between the inputs. Nodal analysis of fb and
+        // out, by Cramer's rule.
+        let m = xsim_spice_engine::library::opamp("OA_GP").expect("OA_GP");
+        let (vin, rf, rg, rl) = (1.0, 9e3, 1e3, 2e3);
+        let (a11, a12, b1) = (-(1.0 / m.rin + 1.0 / rf + 1.0 / rg), 1.0 / rf, -vin / m.rin);
+        let (a21, a22, b2) = (
+            m.aol - m.rout / rf,
+            1.0 + m.rout / rf + m.rout / rl,
+            m.aol * vin,
+        );
+        let det = a11 * a22 - a12 * a21;
+        let fb = (b1 * a22 - a12 * b2) / det;
+        let out = (a11 * b2 - a21 * b1) / det;
+        for (name, expected) in [("V(out)", out), ("V(fb)", fb)] {
+            let v = value(name);
+            assert!(
+                ((v - expected) / expected).abs() < 1e-9,
+                "{name}: {v} vs {expected}"
+            );
+        }
+        assert!((out - 10.0).abs() < 2e-3, "gain 10: {out}");
+        for terminal in ["Ip", "In", "Io", "Isp", "Isn"] {
+            value(&format!("{terminal}(U1)"));
+        }
+        let sourced = out / rl + (out - fb) / rf;
+        let io = value("Io(U1)");
+        assert!(((io + sourced) / sourced).abs() < 1e-9, "Io(U1) = {io}");
+        assert!(((value("Isp(U1)") - sourced) / sourced).abs() < 1e-9);
+    });
+
+    let editor = workspace.read_with(&window, |w, _| w.active_tab().editor.clone());
+    let viewer = workspace.read_with(&window, |w, _| w.active_tab().viewer.clone());
+    let at = editor
+        .read_with(&window, |e, _| {
+            e.grid_to_window(xsim_project::Point::new(OPAMP_AT.0 + 1, OPAMP_AT.1))
+        })
+        .expect("the op-amp is on screen");
+    window.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    window.simulate_click(at, gpui_kit::Modifiers::default());
+    window.run_until_parked();
+    let plotted: Vec<String> = viewer.read_with(&window, |v, _| {
+        v.setup()
+            .panes
+            .iter()
+            .flat_map(|pane| pane.traces.iter().map(|t| t.expression.clone()))
+            .collect()
+    });
+    assert!(
+        plotted.iter().any(|t| t == "Io(U1)"),
+        "the click probes the output current: {plotted:?}"
+    );
+    // Resting on the op-amp shows its card (its values are checked in the
+    // editor's tests).
+    let rest = gpui_kit::point(at.x + gpui_kit::px(1.), at.y);
+    window.simulate_mouse_move(rest, None, gpui_kit::Modifiers::default());
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    window.run_until_parked();
+    assert!(
+        window.debug_bounds("hover-card").is_some(),
+        "resting on the op-amp shows its card"
+    );
     close(&mut window);
 }
 

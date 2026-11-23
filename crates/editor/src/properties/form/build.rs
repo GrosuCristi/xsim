@@ -106,6 +106,7 @@ impl PartForm {
                 },
             },
             PartKind::Ground => Part::Ground,
+            PartKind::OpAmp => Part::OpAmp { model },
         }
     }
 

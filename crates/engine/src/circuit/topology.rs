@@ -17,6 +17,12 @@
 //! gmin). Capacitors conduct only in a transient step, or at the transient's
 //! starting operating point when they carry an initial voltage (D16).
 //! Current sources and switch control inputs never conduct.
+//!
+//! An op-amp (D26) drives its output from a ground-referenced internal
+//! stage, so its output conducts to ground. A macro-model's inputs conduct
+//! to each other through `rin`; an ideal op-amp's inputs draw no current,
+//! like a switch's control input. The supply pins carry the output current
+//! only, so they need a path of their own (normally the supply sources).
 
 use super::{Circuit, Device, GROUND, NodeIndex};
 
@@ -105,6 +111,8 @@ struct Role<'a> {
     coupler: bool,
     /// Switch control inputs (no current).
     sensed: &'a [NodeIndex],
+    /// Terminals joined to ground (an op-amp's output).
+    grounded: &'a [NodeIndex],
 }
 
 fn role<'a>(device: &Device, nodes: &'a [NodeIndex], regime: Regime) -> Role<'a> {
@@ -114,6 +122,7 @@ fn role<'a>(device: &Device, nodes: &'a [NodeIndex], regime: Regime) -> Role<'a>
         injector: false,
         coupler: false,
         sensed: &[],
+        grounded: &[],
     };
     match device {
         Device::Capacitor {
@@ -146,6 +155,15 @@ fn role<'a>(device: &Device, nodes: &'a [NodeIndex], regime: Regime) -> Role<'a>
         Device::VoltageSwitch { .. } => {
             role.conducting = &nodes[..2.min(nodes.len())];
             role.sensed = &nodes[2.min(nodes.len())..];
+        }
+        Device::OpAmp { model } if nodes.len() == 5 => {
+            if model.kind == crate::models::OpAmpKind::Ideal {
+                role.conducting = &[];
+                role.sensed = &nodes[..2];
+            } else {
+                role.conducting = &nodes[..2];
+            }
+            role.grounded = &nodes[2..3];
         }
         // Resistors, semiconductors (junction gmin joins every terminal)
         // and any other device conduct between all their terminals.
@@ -200,6 +218,9 @@ impl Circuit {
                 for &other in rest {
                     sets.union(first, other);
                 }
+            }
+            for &node in role.grounded {
+                sets.union(GROUND, node);
             }
         }
         let ground = sets.find(GROUND);

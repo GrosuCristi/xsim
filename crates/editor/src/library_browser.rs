@@ -1,8 +1,8 @@
 //! Component library window (Q54, Q144).
 //!
 //! Layout: a search field on top; a category tree on the left (Basic parts,
-//! Sources, Switches, Diodes, Transistors, JFETs with the library's
-//! sub-categories); the list of matching parts/models on the right; a
+//! Sources, Switches, Diodes, Transistors, JFETs, Op-amps with the
+//! library's sub-categories); the list of matching parts/models on the right; a
 //! preview of the selected symbol with its metadata (description,
 //! manufacturer, key parameters, provenance) at the bottom. Picking an item
 //! calls the caller's callback.
@@ -61,6 +61,10 @@ pub enum LibraryItem {
         polarity: Polarity,
         model: String,
     },
+    /// An op-amp using a library model (D26).
+    OpAmp {
+        model: String,
+    },
 }
 
 impl LibraryItem {
@@ -85,11 +89,12 @@ impl LibraryItem {
                 polarity: Polarity::P,
                 ..
             } => PartKind::PJfet,
+            Self::OpAmp { .. } => PartKind::OpAmp,
         }
     }
 
     /// The part to place for this item: default parameters for a basic part,
-    /// or a semiconductor using the picked model. Pass it to
+    /// or a semiconductor or op-amp using the picked model. Pass it to
     /// [`crate::SchematicEditor::start_placing`].
     pub fn to_part(&self) -> Part {
         match self {
@@ -105,11 +110,14 @@ impl LibraryItem {
                 polarity: *polarity,
                 model: model.clone(),
             },
+            Self::OpAmp { model } => Part::OpAmp {
+                model: model.clone(),
+            },
         }
     }
 
-    /// The model item a semiconductor part uses; `None` for parts without a
-    /// model.
+    /// The model item a semiconductor or op-amp uses; `None` for parts
+    /// without a model.
     pub fn model_of(part: &Part) -> Option<Self> {
         match part {
             Part::Diode { model } => Some(Self::Diode {
@@ -121,6 +129,9 @@ impl LibraryItem {
             }),
             Part::Jfet { polarity, model } => Some(Self::Jfet {
                 polarity: *polarity,
+                model: model.clone(),
+            }),
+            Part::OpAmp { model } => Some(Self::OpAmp {
                 model: model.clone(),
             }),
             _ => None,
@@ -136,6 +147,8 @@ pub enum LibraryFilter {
     Diodes,
     Bjts(Polarity),
     Jfets(Polarity),
+    /// The op-amp models (D26).
+    OpAmps,
 }
 
 impl LibraryFilter {
@@ -143,7 +156,8 @@ impl LibraryFilter {
     pub fn admits(&self, item: &LibraryItem) -> bool {
         match (self, item) {
             (Self::All, _) => true,
-            (Self::Diodes, LibraryItem::Diode { .. }) => true,
+            (Self::Diodes, LibraryItem::Diode { .. })
+            | (Self::OpAmps, LibraryItem::OpAmp { .. }) => true,
             (Self::Bjts(wanted), LibraryItem::Bjt { polarity, .. })
             | (Self::Jfets(wanted), LibraryItem::Jfet { polarity, .. }) => wanted == polarity,
             _ => false,
@@ -159,6 +173,7 @@ impl LibraryFilter {
             PartKind::PnpBjt => Some(Self::Bjts(Polarity::P)),
             PartKind::NJfet => Some(Self::Jfets(Polarity::N)),
             PartKind::PJfet => Some(Self::Jfets(Polarity::P)),
+            PartKind::OpAmp => Some(Self::OpAmps),
             _ => None,
         }
     }
@@ -169,6 +184,9 @@ impl LibraryFilter {
 pub(crate) struct ModelSummary {
     pub description: String,
     pub manufacturer: String,
+    /// Key parameters, formatted with units, as the library preview lists
+    /// them.
+    pub parameters: Vec<(&'static str, String)>,
 }
 
 /// Metadata of `item` from the built-in library; `None` when it is not
@@ -179,6 +197,7 @@ pub(crate) fn model_summary(item: &LibraryItem) -> Option<ModelSummary> {
         .map(|entry| ModelSummary {
             description: entry.description.clone(),
             manufacturer: entry.manufacturer.clone(),
+            parameters: entry.parameters.clone(),
         })
 }
 
@@ -225,6 +244,9 @@ mod tests {
                 polarity: Polarity::N,
                 model: "NJF_MID".into(),
             },
+            LibraryItem::OpAmp {
+                model: "OA_FAST".into(),
+            },
         ];
         for item in items {
             let part = item.to_part();
@@ -252,5 +274,15 @@ mod tests {
             Some(LibraryFilter::Jfets(Polarity::P))
         );
         assert_eq!(LibraryFilter::for_kind(PartKind::Resistor), None);
+        let opamp = LibraryItem::OpAmp {
+            model: "OA_GP".into(),
+        };
+        assert!(LibraryFilter::OpAmps.admits(&opamp));
+        assert!(!LibraryFilter::Diodes.admits(&opamp));
+        assert!(!LibraryFilter::OpAmps.admits(&npn));
+        assert_eq!(
+            LibraryFilter::for_kind(PartKind::OpAmp),
+            Some(LibraryFilter::OpAmps)
+        );
     }
 }

@@ -103,10 +103,12 @@ pub enum PartKind {
     VoltageSwitch,
     /// Current-controlled switch (D17), SPICE `W`.
     CurrentSwitch,
+    /// Op-amp (D26), placed from the component library.
+    OpAmp,
 }
 
 impl PartKind {
-    pub const ALL: [PartKind; 13] = [
+    pub const ALL: [PartKind; 14] = [
         PartKind::Resistor,
         PartKind::Capacitor,
         PartKind::Inductor,
@@ -119,11 +121,12 @@ impl PartKind {
         PartKind::PJfet,
         PartKind::VoltageSwitch,
         PartKind::CurrentSwitch,
+        PartKind::OpAmp,
         PartKind::Ground,
     ];
 
     /// Reference designator prefix (`R`, `C`, `L`, `V`, `I`, `D`, `Q`, `J`,
-    /// `S`, `W`, `GND`).
+    /// `S`, `W`, `U`, `GND`).
     pub fn prefix(self) -> &'static str {
         match self {
             Self::Resistor => "R",
@@ -136,6 +139,7 @@ impl PartKind {
             Self::NJfet | Self::PJfet => "J",
             Self::VoltageSwitch => "S",
             Self::CurrentSwitch => "W",
+            Self::OpAmp => "U",
             Self::Ground => "GND",
         }
     }
@@ -155,6 +159,7 @@ impl PartKind {
             Self::PJfet => "P-channel JFET",
             Self::VoltageSwitch => "Voltage-controlled switch",
             Self::CurrentSwitch => "Current-controlled switch",
+            Self::OpAmp => "Op-amp",
             Self::Ground => "Ground",
         }
     }
@@ -205,6 +210,11 @@ pub enum Part {
         control: String,
         model: CurrentSwitchModel,
     },
+    /// Op-amp (D26) on `+`, `−`, `OUT`, `V+`, `V−`; like the
+    /// semiconductors it references a model by name in the model library.
+    OpAmp {
+        model: String,
+    },
     Ground,
 }
 
@@ -235,12 +245,13 @@ impl Part {
             } => PartKind::PJfet,
             Self::VoltageSwitch { .. } => PartKind::VoltageSwitch,
             Self::CurrentSwitch { .. } => PartKind::CurrentSwitch,
+            Self::OpAmp { .. } => PartKind::OpAmp,
             Self::Ground => PartKind::Ground,
         }
     }
 
     /// Default parameters for a newly placed part: 1 kΩ, 1 µF, 1 mH, 1 V DC,
-    /// 1 mA DC and the library's default semiconductor models.
+    /// 1 mA DC and the library's default semiconductor and op-amp models.
     ///
     /// Switches default to RON = 1 Ω and ROFF = 1 MΩ, a ratio of 10⁶ that
     /// keeps the off state far below the on state without the extreme
@@ -305,12 +316,15 @@ impl Part {
                     ..CurrentSwitchModel::default()
                 },
             },
+            PartKind::OpAmp => Self::OpAmp {
+                model: library::default_opamp().into(),
+            },
             PartKind::Ground => Self::Ground,
         }
     }
 
     /// Short value text shown next to the symbol, e.g. `"1 kΩ"`, `"1 µF"`,
-    /// `"PULSE(0 1 …)"`, `"NPN_GP"`, `"RON=1 ROFF=1M VT=500m"` for a
+    /// `"PULSE(0 1 …)"`, `"NPN_GP"` or `"OA_GP"`, `"RON=1 ROFF=1M VT=500m"` for a
     /// voltage switch and `"V1 IT=1m"` for a current switch. Empty for
     /// ground.
     pub fn summary(&self) -> String {

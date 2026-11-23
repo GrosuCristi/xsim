@@ -1,0 +1,49 @@
+* xsim reference: op-amp macro-model (D26) from behavioural sources
+* The same equations as xsim's Device::OpAmp (crates/engine/src/devices/opamp.rs),
+* built from B sources, R and C: AOL = 2e5, GBW = 2 MHz, SLEW = 2 V/us,
+* RIN = 1 Meg, ROUT = 50, headroom 1.5 V (V+) and 1 V (V-), knee k = 10 mV,
+* clamp gain 1e9 and margin 0.5 V, supply split current 1 uA.
+* tau = AOL/(2 pi GBW) = 15.9154943091895 ms, L = SLEW*tau = 31830.988618379 V.
+* sp(v) = k ln(1 + e^(v/k)); T(x) = x - sp(x - hi) + sp(lo - x);
+* tau dx/dt = L tanh((AOL vd - x - c(x))/L), c(x) = G (sp(x - hi - m) - sp(lo - m - x)).
+* A gain-of-2 stage on +12/-10 V into 2 k: the input steps from -1 V to 6 V and
+* back, so the output slews, clips at V+ - 1.5 V less the ROUT drop, recovers
+* and slews back.
+* LTspice 24 finds the operating point only by pseudo-transient (the state node
+* has no DC conductance of its own); its result is the unique DC solution
+* (V(out) at 4 us and 45 us agree to 1e-14).
+* Run: LTspice.exe -b <deck>.cir, then read the .meas values from <deck>.log.
+.param k=0.01 m=0.5 G=1e9 eps=1e-6
+.param aol=2e5 tau=15.9154943091895m L=31830.988618379
+.param hp=1.5 hn=1.0
+.func sp(v) {max(v,0)+k*ln(1+exp(-abs(v)/k))}
+VP vp 0 12
+VN vn 0 -10
+VIN in 0 PULSE(-1 6 5u 1n 1n 20u 100u)
+R1 inn 0 10k
+R2 inn out 10k
+RL out 0 2k
+* the op-amp: in+ = in, in- = inn
+RIN in inn 1Meg
+BHI hi 0 V=(V(vp)-hp+V(vn)+hn)/2+sp((V(vp)-hp-V(vn)-hn)/2)
+BLO lo 0 V=(V(vp)-hp+V(vn)+hn)/2-sp((V(vp)-hp-V(vn)-hn)/2)
+CX x 0 {tau}
+BX 0 x I=L*tanh((aol*V(in,inn)-V(x)-G*(sp(V(x)-V(hi)-m)-sp(V(lo)-m-V(x))))/L)
+BT t 0 V=V(x)-sp(V(x)-V(hi))+sp(V(lo)-V(x))
+RO t o2 50
+VS o2 out 0
+BP vp 0 I=I(VS)*(1+tanh(I(VS)/eps))/2
+BN vn 0 I=I(VS)*(1-tanh(I(VS)/eps))/2
+.options plotwinsize=0 numdgt=15 measdgt=15 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-15
+.tran 0 50u 0 2n
+.meas TRAN v4 FIND V(out) AT=4u
+.meas TRAN v8 FIND V(out) AT=8u
+.meas TRAN v15 FIND V(out) AT=15u
+.meas TRAN v28 FIND V(out) AT=28u
+.meas TRAN v45 FIND V(out) AT=45u
+.meas TRAN ivp15 FIND I(VP) AT=15u
+.meas TRAN ivn45 FIND I(VN) AT=45u
+.meas TRAN ivp45 FIND I(VP) AT=45u
+.meas TRAN up WHEN V(out)=4 RISE=1
+.meas TRAN down WHEN V(out)=4 FALL=1
+.end

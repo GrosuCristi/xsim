@@ -24,6 +24,8 @@ const REDUNDANT: &[&str] = &[
     "p-channel",
     "n-channel jfet",
     "p-channel jfet",
+    "op-amp",
+    "op-amps",
 ];
 
 /// The tree path of a model: `family` (e.g. `["Bipolar transistors",

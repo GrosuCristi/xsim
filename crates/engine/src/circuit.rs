@@ -4,7 +4,7 @@ mod params;
 pub(crate) mod topology;
 
 use crate::error::CircuitError;
-use crate::models::{BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, SwitchModel};
+use crate::models::{BjtModel, CurrentSwitchModel, DiodeModel, JfetModel, OpAmpModel, SwitchModel};
 use crate::source::Source;
 use serde::{Deserialize, Serialize};
 
@@ -174,6 +174,7 @@ impl Element {
 /// * [`Device::VoltageSwitch`]: `[positive, negative, control+, control-]`.
 /// * [`Device::CurrentSwitch`]: `[positive, negative]`; the control is
 ///   another element, by name.
+/// * [`Device::OpAmp`]: `[in+, in−, out, V+, V−]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Device {
     Resistor {
@@ -233,6 +234,15 @@ pub enum Device {
         control: String,
         model: CurrentSwitchModel,
     },
+    /// Op-amp (D26) on `[in+, in−, out, V+, V−]`. It records one current
+    /// per terminal, each flowing into that terminal: `Ip`, `In` (the
+    /// inputs), `Io` (the output, negative while the op-amp sources
+    /// current), `Isp` and `Isn` (the supply pins). The output current is
+    /// drawn from V+ while sourcing and returned to V− while sinking, so the
+    /// five currents sum to zero.
+    OpAmp {
+        model: OpAmpModel,
+    },
 }
 
 impl Device {
@@ -271,17 +281,19 @@ impl Device {
         match self {
             Self::Bjt { .. } | Self::Jfet { .. } => 3,
             Self::VoltageSwitch { .. } => 4,
+            Self::OpAmp { .. } => 5,
             _ => 2,
         }
     }
 
     /// Names of the terminal currents recorded for this device, in terminal
     /// order, without the element name. Two-terminal devices record one
-    /// current (`"I"`), three-terminal devices one per terminal.
+    /// current (`"I"`), three-terminal devices and op-amps one per terminal.
     pub fn current_prefixes(&self) -> &'static [&'static str] {
         match self {
             Self::Bjt { .. } => &["Ic", "Ib", "Ie"],
             Self::Jfet { .. } => &["Id", "Ig", "Is"],
+            Self::OpAmp { .. } => &["Ip", "In", "Io", "Isp", "Isn"],
             _ => &["I"],
         }
     }
@@ -347,6 +359,7 @@ impl Device {
             }
             Self::VoltageSwitch { model } => params::switch(name, model),
             Self::CurrentSwitch { model, .. } => params::current_switch(name, model),
+            Self::OpAmp { model } => params::opamp(name, model),
         }
     }
 }

@@ -562,6 +562,85 @@ fn choosing_a_model_in_the_library_updates_the_part(cx: &mut TestAppContext) {
     assert_one_undo_step(&editor, &original, &mut cx);
 }
 
+/// D26: an op-amp's model is chosen from the op-amp library like a
+/// semiconductor's; the card lists the chosen model's parameters read-only,
+/// and OK writes the model as one undoable edit together with a new
+/// designator.
+#[gpui_kit::test]
+fn an_opamp_chooses_its_model_and_undoes_in_one_step(cx: &mut TestAppContext) {
+    let original = schematic(&[("U1", Part::default_for(PartKind::OpAmp))]);
+    let (editor, mut cx) = editor_window(cx, original.clone());
+    open(&editor, 1, &mut cx);
+    assert!(is_shown("model-name", &mut cx));
+    assert!(!is_shown("model-unknown", &mut cx), "OA_GP is listed");
+    assert!(is_shown("model-parameters", &mut cx));
+    for label in ["Type", "AOL", "GBW", "Slew rate", "Headroom", "RIN", "ROUT"] {
+        let selector: &'static str = format!("model-parameter-{label}").leak();
+        assert!(is_shown(selector, &mut cx), "{label} is listed");
+    }
+    assert!(
+        !is_shown("field-Resistance", &mut cx),
+        "the model's parameters are not editable fields"
+    );
+    click("choose-model", &mut cx);
+    assert!(is_shown("library-search", &mut cx));
+    assert!(
+        !is_shown("library-item-Resistor", &mut cx),
+        "only op-amp models"
+    );
+    assert!(
+        !is_shown("library-item-D_SIGNAL", &mut cx),
+        "only op-amp models"
+    );
+    cx.simulate_input("OA_FAST");
+    cx.run_until_parked();
+    click("library-pick", &mut cx);
+    assert!(!is_shown("library-search", &mut cx), "the library closed");
+    assert!(is_shown("model-parameters", &mut cx));
+    type_into("field-Designator", "U7", &mut cx);
+    click("properties-ok", &mut cx);
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::OpAmp {
+            model: "OA_FAST".into()
+        }
+    );
+    let name = editor.read_with(&cx, |editor, _| {
+        editor.schematic().component(1).map(|c| c.name.clone())
+    });
+    assert_eq!(name.as_deref(), Some("U7"));
+    assert_one_undo_step(&editor, &original, &mut cx);
+}
+
+/// D26: an op-amp whose model the library does not list says so and shows
+/// no parameters; choosing a listed model brings them.
+#[gpui_kit::test]
+fn an_unknown_opamp_model_shows_no_parameters(cx: &mut TestAppContext) {
+    let original = schematic(&[(
+        "U1",
+        Part::OpAmp {
+            model: "OA_MISSING".into(),
+        },
+    )]);
+    let (editor, mut cx) = editor_window(cx, original);
+    open(&editor, 1, &mut cx);
+    assert!(is_shown("model-unknown", &mut cx));
+    assert!(!is_shown("model-parameters", &mut cx));
+    click("choose-model", &mut cx);
+    cx.simulate_input("OA_IDEAL");
+    cx.run_until_parked();
+    click("library-pick", &mut cx);
+    assert!(!is_shown("model-unknown", &mut cx));
+    assert!(is_shown("model-parameter-GBW", &mut cx));
+    click("properties-ok", &mut cx);
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::OpAmp {
+            model: "OA_IDEAL".into()
+        }
+    );
+}
+
 /// Asserts that every control in `selectors` lies inside the dialog surface:
 /// across, inside the window's; down, inside the content, which may be
 /// taller than the window and scroll (D24), or inside the footer.
@@ -2474,8 +2553,9 @@ fn every_part_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
 
 /// One part of each kind, with its default parameters, ids from 1.
 fn every_part() -> Vec<(&'static str, Part)> {
+    // In the order of `PartKind::ALL`.
     let names = [
-        "R1", "C1", "L1", "V1", "I1", "D1", "Q1", "Q2", "J1", "J2", "GND", "S1", "W1",
+        "R1", "C1", "L1", "V1", "I1", "D1", "Q1", "Q2", "J1", "J2", "S1", "W1", "U1", "GND",
     ];
     names
         .into_iter()
@@ -2599,6 +2679,7 @@ fn longest_model(part: &Part) -> Option<String> {
         Part::Jfet { polarity, .. } => {
             Some(longest(library::jfets(), |model| model.polarity == *polarity).name)
         }
+        Part::OpAmp { .. } => Some(longest(library::opamps(), |_| true).name),
         _ => None,
     }
 }
@@ -2887,6 +2968,13 @@ fn every_model_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
             .into_iter()
             .map(|entry| Part::Jfet {
                 polarity: entry.model.polarity,
+                model: entry.model.name,
+            }),
+    );
+    parts.extend(
+        extremes(library::opamps())
+            .into_iter()
+            .map(|entry| Part::OpAmp {
                 model: entry.model.name,
             }),
     );
