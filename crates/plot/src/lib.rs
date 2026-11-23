@@ -32,9 +32,35 @@
 //! * The `1`/`2` flags at the top of the cursor lines never cover each
 //!   other: when the lines are closer than a flag, cursor 2's drops one row.
 //!
+//! ## Panes (D22, D23)
+//! The panes stack under the toolbar and share the x axis. The **plus** at
+//! the very bottom of the dock, below the last pane and the cursor readout,
+//! adds an empty pane (Enter or Space when it has focus). With more panes
+//! than fit, the stack scrolls with the wheel over a pane's header, the
+//! plus stays in view, and a new pane is scrolled into view. The wheel over
+//! a plot always zooms and never scrolls the stack.
+//!
+//! The panes share the dock's height in proportion to relative heights
+//! stored with the plot setup ([`xsim_project::PlotPane::height`],
+//! [`model::heights`]), so a taller or shorter dock scales them alike, and
+//! no pane is shorter than 7.5 rem (its legend row, a few y ticks and the x
+//! tick labels). Dragging the **divider** between two panes (a 0.5 rem band
+//! on the line between them, with a row-resize pointer and a grip under
+//! the pointer) moves height from one to the other and stops at that
+//! minimum; it never pans, zooms or moves a cursor, and Escape puts the
+//! heights back. A **double click** on a divider makes its two panes
+//! equally high. Either changes the setup once, at the end
+//! ([`ViewerEvent::SetupChanged`]). With every pane at its minimum (a
+//! scrolling stack) the dividers cannot move, and a double click only makes
+//! the two panes' stored heights equal. While a legend chip is dragged the
+//! dividers make way, so the chip drops on either pane up to the line. A
+//! new pane gets an average share; closing a pane gives its height to the
+//! others in proportion.
+//!
 //! Exported images (PNG, JPEG, SVG and the clipboard) show the panes,
 //! traces, axes and legends, but not the cursors or the hover line: Q07,
-//! Q137 and D14 do not ask for them in images.
+//! Q137 and D14 do not ask for them in images. They keep the panes'
+//! relative heights (D23).
 //!
 //! On a phase axis every trace is unwrapped, a typed `ph(…)` included, so
 //! it matches the complex trace it was taken from (INT-9); `ph(…)` itself
@@ -139,6 +165,9 @@ pub struct WaveformViewer {
     result: Option<Arc<SimulationResult>>,
     setup: PlotSetup,
     focus: FocusHandle,
+    /// The "Add pane" plus at the bottom of the dock (D22), owned here so
+    /// keyboard focus stays on it while panes are added.
+    add_pane_focus: FocusHandle,
     traces: TraceStore,
     /// Extent of the result's x axis, computed once per result.
     x_extent: AxisExtent,
@@ -163,6 +192,7 @@ impl WaveformViewer {
             result: None,
             setup: PlotSetup::default(),
             focus: cx.focus_handle(),
+            add_pane_focus: cx.focus_handle(),
             traces: TraceStore::default(),
             x_extent: AxisExtent::default(),
             colors: ui::theme::plot_colors(cx.theme()),

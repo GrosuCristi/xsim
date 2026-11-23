@@ -642,13 +642,13 @@ mod tests {
         out
     }
 
-    /// R1 (pins (-2,0), (2,0)) and R2 (pins (10,0), (14,0)) joined by a U.
+    /// R1 (pins (-4,0), (4,0)) and R2 (pins (20,0), (28,0)) joined by a U.
     fn u_route() -> Schematic {
         Schematic {
-            components: vec![resistor(1, p(0, 0), false), resistor(2, p(12, 0), false)],
+            components: vec![resistor(1, p(0, 0), false), resistor(2, p(24, 0), false)],
             wires: vec![wire(
                 3,
-                &[p(2, 0), p(4, 0), p(4, 4), p(8, 4), p(8, 0), p(10, 0)],
+                &[p(4, 0), p(8, 0), p(8, 8), p(16, 8), p(16, 0), p(20, 0)],
             )],
             labels: Vec::new(),
             next_id: 4,
@@ -660,57 +660,57 @@ mod tests {
         let s = u_route();
         let plan = SegmentPlan::new(&s, 3, 2).expect("plan");
         assert_eq!(plan.normal(), Axis::Vertical);
-        assert_eq!(plan.apply(p(5, 0)), s, "sideways motion changes nothing");
-        let out = drag(&s, 3, 2, p(7, -1));
+        assert_eq!(plan.apply(p(10, 0)), s, "sideways motion changes nothing");
+        let out = drag(&s, 3, 2, p(14, -2));
         assert_eq!(
             points(&out, 3),
-            vec![p(2, 0), p(4, 0), p(4, 3), p(8, 3), p(8, 0), p(10, 0)]
+            vec![p(4, 0), p(8, 0), p(8, 6), p(16, 6), p(16, 0), p(20, 0)]
         );
     }
 
     #[test]
     fn any_distance_in_either_direction_keeps_the_circuit() {
         let s = u_route();
-        for dy in -8..=8 {
+        for dy in -16..=16 {
             let out = drag(&s, 3, 2, p(0, dy));
             let w = points(&out, 3);
-            assert_eq!(w.first(), Some(&p(2, 0)), "dy {dy}");
-            assert_eq!(w.last(), Some(&p(10, 0)), "dy {dy}");
+            assert_eq!(w.first(), Some(&p(4, 0)), "dy {dy}");
+            assert_eq!(w.last(), Some(&p(20, 0)), "dy {dy}");
         }
         // Moved onto the pins' row, the U collapses into a straight wire.
         assert_eq!(
-            points(&drag(&s, 3, 2, p(0, -4)), 3),
-            vec![p(2, 0), p(10, 0)]
+            points(&drag(&s, 3, 2, p(0, -8)), 3),
+            vec![p(4, 0), p(20, 0)]
         );
         // Every leg of the U, both ways and past the far end of its legs.
-        for (segment, delta) in [(1, p(-3, 0)), (1, p(6, 0)), (3, p(3, 0)), (3, p(-9, 0))] {
+        for (segment, delta) in [(1, p(-6, 0)), (1, p(12, 0)), (3, p(6, 0)), (3, p(-18, 0))] {
             drag(&s, 3, segment, delta);
         }
     }
 
     #[test]
     fn a_vertex_that_only_marks_a_junction_does_not_split_the_run() {
-        // The T-junction vertex (6,0) sits inside one straight line.
+        // The T-junction vertex (12,0) sits inside one straight line.
         let s = Schematic {
             components: vec![
                 resistor(1, p(0, 0), false),
-                resistor(2, p(12, 0), false),
-                resistor(3, p(6, 8), true),
+                resistor(2, p(24, 0), false),
+                resistor(3, p(12, 16), true),
             ],
             wires: vec![
-                wire(4, &[p(2, 0), p(6, 0), p(10, 0)]),
-                wire(5, &[p(6, 0), p(6, 6)]),
+                wire(4, &[p(4, 0), p(12, 0), p(20, 0)]),
+                wire(5, &[p(12, 0), p(12, 12)]),
             ],
             labels: Vec::new(),
             next_id: 6,
         };
         for segment in [0, 1] {
-            let out = drag(&s, 4, segment, p(0, -2));
+            let out = drag(&s, 4, segment, p(0, -4));
             assert_eq!(
                 points(&out, 4),
-                vec![p(2, 0), p(2, -2), p(6, -2), p(10, -2), p(10, 0)]
+                vec![p(4, 0), p(4, -4), p(12, -4), p(20, -4), p(20, 0)]
             );
-            assert_eq!(points(&out, 5), vec![p(6, -2), p(6, 6)]);
+            assert_eq!(points(&out, 5), vec![p(12, -4), p(12, 12)]);
         }
     }
 
@@ -720,14 +720,14 @@ mod tests {
         s.labels.push(NetLabel {
             id: 9,
             name: "mid".into(),
-            position: p(6, 4),
+            position: p(12, 8),
         });
-        s.wires[0].points.insert(3, p(6, 4));
+        s.wires[0].points.insert(3, p(12, 8));
         s.next_id = 10;
-        let out = drag(&s, 3, 2, p(0, -2));
-        assert_eq!(out.label(9).map(|l| l.position), Some(p(6, 2)));
+        let out = drag(&s, 3, 2, p(0, -4));
+        assert_eq!(out.label(9).map(|l| l.position), Some(p(12, 4)));
         assert!(
-            points(&out, 3).contains(&p(6, 2)),
+            points(&out, 3).contains(&p(12, 4)),
             "the label keeps a vertex"
         );
     }
@@ -736,12 +736,12 @@ mod tests {
     fn a_crossing_or_a_foreign_bend_is_not_a_connection() {
         let mut s = u_route();
         // A wire crossing the bottom run, and an any-angle wire bending on it.
-        s.components.push(resistor(5, p(6, 10), true));
-        s.components.push(resistor(6, p(10, 9), true));
-        s.wires.push(wire(7, &[p(6, 2), p(6, 8)]));
-        s.wires.push(wire(8, &[p(7, 1), p(7, 4), p(10, 7)]));
+        s.components.push(resistor(5, p(12, 20), true));
+        s.components.push(resistor(6, p(20, 18), true));
+        s.wires.push(wire(7, &[p(12, 4), p(12, 16)]));
+        s.wires.push(wire(8, &[p(14, 2), p(14, 8), p(20, 14)]));
         s.next_id = 9;
-        let out = drag(&s, 3, 2, p(0, 3));
+        let out = drag(&s, 3, 2, p(0, 6));
         assert_eq!(points(&out, 7), points(&s, 7), "the crossing stays");
         assert_eq!(points(&out, 8), points(&s, 8), "the foreign bend stays");
         assert_eq!(out.wires.len(), 3, "no stubs: {:?}", out.wires);
@@ -750,29 +750,29 @@ mod tests {
     #[test]
     fn connections_a_shrinking_leg_leaves_behind_keep_a_stub() {
         let mut s = u_route();
-        // R5's pin wired to the interior of the U's left leg (x = 4).
-        s.components.push(resistor(5, p(-2, 3), false));
-        s.wires.push(wire(6, &[p(0, 3), p(4, 3)]));
+        // R5's pin wired to the interior of the U's left leg (x = 8).
+        s.components.push(resistor(5, p(-4, 6), false));
+        s.wires.push(wire(6, &[p(0, 6), p(8, 6)]));
         s.next_id = 7;
-        for dy in [-1, -3, -4, -6] {
+        for dy in [-2, -6, -8, -12] {
             let out = drag(&s, 3, 2, p(0, dy));
-            assert_eq!(points(&out, 6), vec![p(0, 3), p(4, 3)], "dy {dy}");
+            assert_eq!(points(&out, 6), vec![p(0, 6), p(8, 6)], "dy {dy}");
         }
-        let out = drag(&s, 3, 2, p(0, 2));
+        let out = drag(&s, 3, 2, p(0, 4));
         assert_eq!(out.wires.len(), 2, "a growing leg needs no stub");
     }
 
     #[test]
     fn connections_a_shrinking_follower_leaves_behind_keep_a_stub() {
         let mut s = u_route();
-        // A branch from the U's bottom run down to R5's pin (6,10), and a
-        // wire from R6's pin T'd onto the branch at (6,6).
-        s.components.push(resistor(5, p(6, 12), true));
-        s.components.push(resistor(6, p(11, 6), false));
-        s.wires.push(wire(7, &[p(6, 4), p(6, 10)]));
-        s.wires.push(wire(8, &[p(6, 6), p(9, 6)]));
+        // A branch from the U's bottom run down to R5's pin (12,20), and a
+        // wire from R6's pin T'd onto the branch at (12,12).
+        s.components.push(resistor(5, p(12, 24), true));
+        s.components.push(resistor(6, p(22, 12), false));
+        s.wires.push(wire(7, &[p(12, 8), p(12, 20)]));
+        s.wires.push(wire(8, &[p(12, 12), p(18, 12)]));
         s.next_id = 9;
-        for dy in [1, 2, 3, 6, 8, -2] {
+        for dy in [2, 4, 6, 12, 16, -4] {
             let out = drag(&s, 3, 2, p(0, dy));
             assert_eq!(points(&out, 8), points(&s, 8), "dy {dy}: R6's wire stays");
         }
@@ -783,19 +783,22 @@ mod tests {
         // A stub from R1's pin to nowhere.
         let s = Schematic {
             components: vec![resistor(1, p(0, 0), false)],
-            wires: vec![wire(2, &[p(2, 0), p(6, 0)])],
+            wires: vec![wire(2, &[p(4, 0), p(12, 0)])],
             labels: Vec::new(),
             next_id: 3,
         };
-        let out = drag(&s, 2, 0, p(0, 3));
-        assert_eq!(points(&out, 2), vec![p(2, 0), p(2, 3), p(6, 3)]);
+        let out = drag(&s, 2, 0, p(0, 6));
+        assert_eq!(points(&out, 2), vec![p(4, 0), p(4, 6), p(12, 6)]);
     }
 
     #[test]
     fn wires_touching_nothing_and_diagonals_are_not_segment_dragged() {
         let s = Schematic {
             components: vec![resistor(1, p(0, 0), false)],
-            wires: vec![wire(2, &[p(10, 0), p(14, 0)]), wire(3, &[p(2, 0), p(6, 4)])],
+            wires: vec![
+                wire(2, &[p(20, 0), p(28, 0)]),
+                wire(3, &[p(4, 0), p(12, 8)]),
+            ],
             labels: Vec::new(),
             next_id: 4,
         };
@@ -807,24 +810,24 @@ mod tests {
 
     #[test]
     fn a_branch_end_slides_along_the_wire_it_joins() {
-        // Wire 4 leaves the U's bottom run at (6,4) for R5's pin (6,8).
+        // Wire 4 leaves the U's bottom run at (12,8) for R5's pin (12,16).
         let mut s = u_route();
-        s.components.push(resistor(5, p(6, 10), true));
-        s.wires.push(wire(4, &[p(6, 4), p(6, 8)]));
+        s.components.push(resistor(5, p(12, 20), true));
+        s.wires.push(wire(4, &[p(12, 8), p(12, 16)]));
         s.next_id = 6;
-        let out = drag(&s, 4, 0, p(1, 0));
-        assert_eq!(points(&out, 4), vec![p(7, 4), p(7, 8), p(6, 8)]);
-        assert_eq!(points(&out, 3), points(&s, 3), "the trunk stays");
         let out = drag(&s, 4, 0, p(2, 0));
+        assert_eq!(points(&out, 4), vec![p(14, 8), p(14, 16), p(12, 16)]);
+        assert_eq!(points(&out, 3), points(&s, 3), "the trunk stays");
+        let out = drag(&s, 4, 0, p(4, 0));
         assert_eq!(
             points(&out, 4),
-            vec![p(8, 4), p(8, 8), p(6, 8)],
+            vec![p(16, 8), p(16, 16), p(12, 16)],
             "onto the trunk's corner"
         );
-        let out = drag(&s, 4, 0, p(3, 0));
+        let out = drag(&s, 4, 0, p(6, 0));
         assert_eq!(
             points(&out, 4).first(),
-            Some(&p(6, 4)),
+            Some(&p(12, 8)),
             "off the trunk the end keeps its place"
         );
     }
@@ -833,95 +836,96 @@ mod tests {
 
     #[test]
     fn a_leg_dragged_onto_the_other_leg_keeps_a_t_junction_there() {
-        // R5's wire tees onto the U's right leg at (8,2); the left leg is
+        // R5's wire tees onto the U's right leg at (16,4); the left leg is
         // dragged onto the right one, folding the U flat.
         let mut s = u_route();
-        s.components.push(resistor(5, p(14, 2), false));
-        s.wires.push(wire(6, &[p(8, 2), p(12, 2)]));
+        s.components.push(resistor(5, p(28, 4), false));
+        s.wires.push(wire(6, &[p(16, 4), p(24, 4)]));
         s.next_id = 7;
-        let out = drag(&s, 3, 1, p(4, 0));
-        assert_eq!(points(&out, 6), vec![p(8, 2), p(12, 2)], "R5's wire stays");
+        let out = drag(&s, 3, 1, p(8, 0));
+        assert_eq!(points(&out, 6), vec![p(16, 4), p(24, 4)], "R5's wire stays");
     }
 
     #[test]
     fn a_branch_with_a_label_at_its_junction_still_slides() {
         // As in `a_branch_end_slides_along_the_wire_it_joins`, with the net
-        // named by a label at the junction (6,4).
+        // named by a label at the junction (12,8).
         let mut s = u_route();
-        s.components.push(resistor(5, p(6, 10), true));
-        s.wires.push(wire(4, &[p(6, 4), p(6, 8)]));
+        s.components.push(resistor(5, p(12, 20), true));
+        s.wires.push(wire(4, &[p(12, 8), p(12, 16)]));
         s.labels.push(NetLabel {
             id: 6,
             name: "mid".into(),
-            position: p(6, 4),
+            position: p(12, 8),
         });
-        s.wires[0].points.insert(3, p(6, 4));
+        s.wires[0].points.insert(3, p(12, 8));
         s.next_id = 7;
-        let out = drag(&s, 4, 0, p(1, 0));
-        assert_eq!(points(&out, 4), vec![p(7, 4), p(7, 8), p(6, 8)]);
+        let out = drag(&s, 4, 0, p(2, 0));
+        assert_eq!(points(&out, 4), vec![p(14, 8), p(14, 16), p(12, 16)]);
         assert_eq!(
             out.label(6).map(|l| l.position),
-            Some(p(6, 4)),
+            Some(p(12, 8)),
             "on the trunk"
         );
     }
 
     #[test]
     fn a_label_on_the_run_stays_where_a_crossing_wire_needs_it() {
-        // Wire 7 crosses the U's left leg at (4,2), where the label `n`
+        // Wire 7 crosses the U's left leg at (8,4), where the label `n`
         // joins the two; R5 hangs off wire 7.
         let mut s = u_route();
-        s.components.push(resistor(5, p(9, 2), false));
-        s.wires.push(wire(7, &[p(1, 2), p(4, 2), p(7, 2)]));
+        s.components.push(resistor(5, p(18, 4), false));
+        s.wires.push(wire(7, &[p(2, 4), p(8, 4), p(14, 4)]));
         s.labels.push(NetLabel {
             id: 8,
             name: "n".into(),
-            position: p(4, 2),
+            position: p(8, 4),
         });
         s.next_id = 9;
-        for dx in [-4, -1, 2, 5] {
+        for dx in [-8, -2, 4, 10] {
             let out = drag(&s, 3, 1, p(dx, 0));
-            assert_eq!(out.label(8).map(|l| l.position), Some(p(4, 2)), "dx {dx}");
+            assert_eq!(out.label(8).map(|l| l.position), Some(p(8, 4)), "dx {dx}");
         }
     }
 
     #[test]
     fn a_loop_hanging_off_the_run_stretches_instead_of_moving_away() {
-        // Wire 9 leaves the U's bottom at (5,4) and returns at (7,4); R5's
-        // pin (6,8) sits on its bottom.
+        // Wire 9 leaves the U's bottom at (10,8) and returns at (14,8); R5's
+        // pin (12,16) sits on its bottom.
         let mut s = u_route();
-        s.components.push(resistor(5, p(6, 10), true));
-        s.wires.push(wire(9, &[p(5, 4), p(5, 8), p(7, 8), p(7, 4)]));
+        s.components.push(resistor(5, p(12, 20), true));
+        s.wires
+            .push(wire(9, &[p(10, 8), p(10, 16), p(14, 16), p(14, 8)]));
         s.next_id = 10;
-        let out = drag(&s, 3, 2, p(0, -2));
+        let out = drag(&s, 3, 2, p(0, -4));
         assert_eq!(
             points(&out, 9),
-            vec![p(5, 2), p(5, 8), p(7, 8), p(7, 2)],
+            vec![p(10, 4), p(10, 16), p(14, 16), p(14, 4)],
             "only the ends on the run follow it"
         );
     }
 
     #[test]
     fn a_rung_collapsing_onto_a_crossing_falls_back_to_holding_everything() {
-        // A vertical run (8,0)–(8,8) of wire 3 between R1 and R3, and a rung
-        // (wire 6) from it to the vertical wire 5 at x = 4, R2's only link.
-        // Dragged onto x = 4 the rung would vanish and the run would merely
+        // A vertical run (16,0)–(16,16) of wire 3 between R1 and R3, and a rung
+        // (wire 6) from it to the vertical wire 5 at x = 8, R2's only link.
+        // Dragged onto x = 8 the rung would vanish and the run would merely
         // lie over wire 5.
         let s = Schematic {
             components: vec![
-                resistor(1, p(12, 0), false),
-                resistor(2, p(4, 12), true),
-                resistor(3, p(12, 8), false),
+                resistor(1, p(24, 0), false),
+                resistor(2, p(8, 24), true),
+                resistor(3, p(24, 16), false),
             ],
             wires: vec![
-                wire(3, &[p(10, 0), p(8, 0), p(8, 8), p(10, 8)]),
-                wire(5, &[p(4, -2), p(4, 10)]),
-                wire(6, &[p(4, 4), p(8, 4)]),
+                wire(3, &[p(20, 0), p(16, 0), p(16, 16), p(20, 16)]),
+                wire(5, &[p(8, -4), p(8, 20)]),
+                wire(6, &[p(8, 8), p(16, 8)]),
             ],
             labels: Vec::new(),
             next_id: 7,
         };
-        for dx in [-2, -4, -5] {
+        for dx in [-4, -8, -10] {
             drag(&s, 3, 1, p(dx, 0));
         }
     }

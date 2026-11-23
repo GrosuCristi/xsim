@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "RC low-pass",
   "circuits": [
     {
@@ -11,7 +11,7 @@
             "name": "V1",
             "position": {
               "x": 0,
-              "y": 4
+              "y": 8
             },
             "orientation": {
               "rotation": 1,
@@ -33,7 +33,7 @@
             "id": 2,
             "name": "R1",
             "position": {
-              "x": 6,
+              "x": 12,
               "y": 0
             },
             "orientation": {
@@ -51,8 +51,8 @@
             "id": 3,
             "name": "C1",
             "position": {
-              "x": 12,
-              "y": 4
+              "x": 24,
+              "y": 8
             },
             "orientation": {
               "rotation": 1,
@@ -70,8 +70,8 @@
             "id": 4,
             "name": "GND1",
             "position": {
-              "x": 6,
-              "y": 8
+              "x": 12,
+              "y": 16
             },
             "orientation": {
               "rotation": 0,
@@ -87,14 +87,14 @@
             "points": [
               {
                 "x": 0,
-                "y": 2
+                "y": 4
               },
               {
                 "x": 0,
                 "y": 0
               },
               {
-                "x": 4,
+                "x": 8,
                 "y": 0
               }
             ]
@@ -103,16 +103,16 @@
             "id": 6,
             "points": [
               {
-                "x": 8,
+                "x": 16,
                 "y": 0
               },
               {
-                "x": 12,
+                "x": 24,
                 "y": 0
               },
               {
-                "x": 12,
-                "y": 2
+                "x": 24,
+                "y": 4
               }
             ]
           },
@@ -121,19 +121,19 @@
             "points": [
               {
                 "x": 0,
-                "y": 6
+                "y": 12
               },
               {
                 "x": 0,
-                "y": 8
+                "y": 16
               },
               {
-                "x": 12,
-                "y": 8
+                "x": 24,
+                "y": 16
               },
               {
-                "x": 12,
-                "y": 6
+                "x": 24,
+                "y": 12
               }
             ]
           }
@@ -151,7 +151,7 @@
             "id": 9,
             "name": "out",
             "position": {
-              "x": 12,
+              "x": 24,
               "y": 0
             }
           }
@@ -163,7 +163,7 @@
           0.0,
           0.0
         ],
-        "zoom": 20.0,
+        "zoom": 10.0,
         "user_set": false
       },
       "simulation": {

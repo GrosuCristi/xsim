@@ -2,19 +2,24 @@
 //! category (D12), categories, keyboard navigation, picking and family
 //! filters.
 //!
+//! The library is a window of its own (D22). The helpers keep the test's
+//! `VisualTestContext` on the window that has the keyboard: the library, or
+//! the host window once it closed.
+//!
 //! They locate controls with debug selectors, which only debug builds record.
 #![cfg(debug_assertions)]
 
 use gpui_kit::component::Theme;
 use gpui_kit::{
-    AppContext as _, Bounds, Context, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    Styled as _, TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div,
-    point, px, size,
+    AnyWindowHandle, AppContext as _, Bounds, Context, Entity, Focusable as _, IntoElement,
+    KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, Styled as _, TestAppContext, VisualContext as _,
+    VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px, size,
 };
 use std::{cell::RefCell, rc::Rc};
 use xsim_editor::library_browser::{LibraryFilter, LibraryItem, open_library, open_library_at};
-use xsim_project::PartKind;
+use xsim_editor::{SchematicEditor, Tool, dialog_window};
+use xsim_project::{PartKind, Schematic, SchematicView};
 use xsim_spice_engine::{Polarity, library};
 
 /// An empty window content for the dialog to sit on.
@@ -32,6 +37,7 @@ fn host_window(cx: &mut TestAppContext) -> VisualTestContext {
     let (window, _) = cx.update(|cx| {
         gpui_kit::init(cx);
         cx.set_reduce_motion(true);
+        dialog_window::init(cx);
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -50,10 +56,53 @@ fn host_window(cx: &mut TestAppContext) -> VisualTestContext {
     visual
 }
 
-/// Opens the library with `filter` and records every pick.
+/// The host window: the one that is no dialog.
+fn host(cx: &VisualTestContext) -> AnyWindowHandle {
+    cx.cx
+        .read(|app| {
+            app.windows()
+                .into_iter()
+                .find(|window| dialog_window::owner_of(*window, app).is_none())
+        })
+        .expect("the host window")
+}
+
+/// The library's window, while it is open.
+fn library(cx: &VisualTestContext) -> Option<AnyWindowHandle> {
+    let host = host(cx);
+    cx.cx.read(|app| dialog_window::dialog_of(host, app))
+}
+
+/// Points `cx` at `window`.
+fn switch_to(window: AnyWindowHandle, cx: &mut VisualTestContext) {
+    if cx.window_handle() != window {
+        let next = VisualTestContext::from_window(window, &cx.cx);
+        *cx = next;
+    }
+}
+
+/// Points `cx` at the window with the keyboard: the library while it is
+/// open, the host window after.
+fn follow(cx: &mut VisualTestContext) {
+    let top = library(cx).unwrap_or_else(|| host(cx));
+    switch_to(top, cx);
+}
+
+/// Types the space-separated `keystrokes` in the window with the keyboard.
+fn keys(keystrokes: &str, cx: &mut VisualTestContext) {
+    follow(cx);
+    cx.simulate_keystrokes(keystrokes);
+    cx.run_until_parked();
+    follow(cx);
+}
+
+/// Opens the library over the host window with `filter`, points `cx` at
+/// it and records every pick.
 fn open(filter: LibraryFilter, selected: Option<LibraryItem>, cx: &mut VisualTestContext) -> Picks {
     let picks = Picks::default();
     let record = picks.clone();
+    let host = host(cx);
+    switch_to(host, cx);
     cx.update(|window, cx| {
         open_library_at(
             filter,
@@ -64,14 +113,17 @@ fn open(filter: LibraryFilter, selected: Option<LibraryItem>, cx: &mut VisualTes
         )
     });
     cx.run_until_parked();
+    follow(cx);
     picks
 }
 
 fn is_shown(selector: &'static str, cx: &mut VisualTestContext) -> bool {
+    follow(cx);
     cx.debug_bounds(selector).is_some()
 }
 
 fn click_with_count(selector: &'static str, clicks: usize, cx: &mut VisualTestContext) {
+    follow(cx);
     let position = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("{selector} should be visible"))
@@ -91,6 +143,7 @@ fn click_with_count(selector: &'static str, clicks: usize, cx: &mut VisualTestCo
         click_count: clicks,
     });
     cx.run_until_parked();
+    follow(cx);
 }
 
 fn click(selector: &'static str, cx: &mut VisualTestContext) {
@@ -98,20 +151,23 @@ fn click(selector: &'static str, cx: &mut VisualTestContext) {
 }
 
 fn type_query(text: &str, cx: &mut VisualTestContext) {
+    follow(cx);
     cx.simulate_input(text);
     cx.run_until_parked();
 }
 
 /// Deletes the last `chars` characters of the query.
 fn erase(chars: usize, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes(&vec!["backspace"; chars].join(" "));
-    cx.run_until_parked();
+    keys(&vec!["backspace"; chars].join(" "), cx);
 }
 
 /// Presses and releases each of the space-separated `keys`, as a keyboard
-/// does: a focused button is pressed on the release.
+/// does: a focused button is pressed on the release. A press that closes
+/// the library leaves the release nowhere, as it is released in another
+/// window.
 fn press(keys: &str, cx: &mut VisualTestContext) {
     for key in keys.split(' ') {
+        follow(cx);
         let keystroke = cx
             .update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os))
             .unwrap_or_else(|_| panic!("{key} is not a key"));
@@ -120,9 +176,12 @@ fn press(keys: &str, cx: &mut VisualTestContext) {
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(KeyUpEvent { keystroke });
+        if cx.windows().contains(&cx.window_handle()) {
+            cx.simulate_event(KeyUpEvent { keystroke });
+        }
         cx.run_until_parked();
     }
+    follow(cx);
 }
 
 /// A debug selector built at run time.
@@ -166,8 +225,7 @@ fn searching_narrows_the_list_and_enter_picks_the_best_match(cx: &mut TestAppCon
     type_query("capac", &mut cx);
     assert!(is_shown("library-item-Capacitor", &mut cx));
     assert!(!is_shown("library-item-Resistor", &mut cx));
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(*picks.borrow(), [LibraryItem::Part(PartKind::Capacitor)]);
     assert!(
         !is_shown("library-search", &mut cx),
@@ -180,8 +238,7 @@ fn up_and_down_move_the_selection_from_the_search_field(cx: &mut TestAppContext)
     let mut cx = host_window(cx);
     let picks = open(LibraryFilter::All, None, &mut cx);
     cx.simulate_keystrokes("down down down up");
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(*picks.borrow(), [LibraryItem::Part(PartKind::Inductor)]);
 }
 
@@ -261,8 +318,7 @@ fn the_switches_are_listed_searchable_and_picked(cx: &mut TestAppContext) {
 fn escape_and_cancel_close_without_picking(cx: &mut TestAppContext) {
     let mut cx = host_window(cx);
     let picks = open(LibraryFilter::All, None, &mut cx);
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
+    keys("escape", &mut cx);
     assert!(!is_shown("library-search", &mut cx));
     let more = open(LibraryFilter::All, None, &mut cx);
     click("library-cancel", &mut cx);
@@ -436,8 +492,7 @@ fn family_filters_list_only_matching_models(cx: &mut TestAppContext) {
     );
     erase(library::default_bjt(Polarity::N).len(), &mut cx);
     type_query("PNP_GP", &mut cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(
         *picks.borrow(),
         [LibraryItem::Bjt {
@@ -504,8 +559,7 @@ fn every_builtin_model_is_listed(cx: &mut TestAppContext) {
     assert!(!diodes.is_empty());
     let first = diodes[0].model.name.clone();
     type_query(&first, &mut cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(*picks.borrow(), [LibraryItem::Diode { model: first }]);
 }
 
@@ -521,8 +575,7 @@ fn the_current_model_is_preselected(cx: &mut TestAppContext) {
         Some(current.clone()),
         &mut cx,
     );
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(*picks.borrow(), [current]);
 }
 
@@ -540,8 +593,7 @@ fn open_library_lists_everything(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(*picks.borrow(), [LibraryItem::Part(PartKind::Resistor)]);
 }
 
@@ -570,8 +622,7 @@ fn the_layout_stays_inside_the_dialog_at_every_ui_scale(cx: &mut TestAppContext)
                 && bounds.bottom() <= dialog.bottom();
             assert!(inside, "{selector} {bounds:?} leaves the dialog {dialog:?}");
         }
-        cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
+        keys("escape", &mut cx);
     }
 }
 
@@ -749,8 +800,10 @@ fn the_category_tree_works_from_the_keyboard(cx: &mut TestAppContext) {
     assert!(!is_shown("library-search", &mut cx));
 }
 
-/// Enter on a focused button presses that button: Cancel and the dialog's
-/// close button close the window without picking, Place picks.
+/// Enter on a focused button presses that button: Cancel closes the window
+/// without picking, Place picks. The window's close button is a window
+/// control, no tab stop (D22): a click on it closes without picking, and
+/// Tab goes from Place round to the search field, where Enter picks.
 #[gpui_kit::test]
 fn enter_presses_the_focused_button(cx: &mut TestAppContext) {
     let mut cx = host_window(cx);
@@ -762,14 +815,19 @@ fn enter_presses_the_focused_button(cx: &mut TestAppContext) {
     assert!(picks.borrow().is_empty(), "without picking");
 
     let more = open(LibraryFilter::All, None, &mut cx);
-    // Search field, category tree, Cancel, Place, close.
-    press("tab tab tab tab", &mut cx);
-    press("enter", &mut cx);
+    click("dialog-close", &mut cx);
     assert!(
         !is_shown("library-search", &mut cx),
         "the close button closed it"
     );
     assert!(more.borrow().is_empty(), "without picking");
+
+    let round = open(LibraryFilter::All, None, &mut cx);
+    // Search field, category tree, Cancel, Place, then the search field.
+    press("tab tab tab tab", &mut cx);
+    press("enter", &mut cx);
+    assert!(!is_shown("library-search", &mut cx), "Enter picked");
+    assert_eq!(*round.borrow(), [LibraryItem::Part(PartKind::Resistor)]);
 
     let placed = open(LibraryFilter::All, None, &mut cx);
     press("tab tab tab", &mut cx);
@@ -799,6 +857,7 @@ fn enter_after_a_click_on_the_dialog_margin_still_places(cx: &mut TestAppContext
 /// A double click is a press, release, press and release; the second
 /// release reports two clicks.
 fn double_click(selector: &'static str, cx: &mut VisualTestContext) {
+    follow(cx);
     let position = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("{selector} should be visible"))
@@ -820,6 +879,7 @@ fn double_click(selector: &'static str, cx: &mut VisualTestContext) {
         });
     }
     cx.run_until_parked();
+    follow(cx);
 }
 
 /// A double click on a category row opens or closes it once, rather than
@@ -922,4 +982,150 @@ fn enter_and_escape_work_after_clicks_in_the_lists(cx: &mut TestAppContext) {
     click(selector(format!("library-item-{diode}")), &mut cx);
     press("enter", &mut cx);
     assert_eq!(*placed.borrow(), [LibraryItem::Diode { model: diode }]);
+}
+
+/// A host window showing a schematic editor that has the keyboard.
+fn editor_window(cx: &mut TestAppContext) -> (Entity<SchematicEditor>, VisualTestContext) {
+    let (window, editor) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+        dialog_window::init(cx);
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(40.), px(30.)),
+                    size(px(1280.), px(900.)),
+                ))),
+                ..WindowOptions::default()
+            },
+            cx,
+            |window, cx| {
+                let editor = cx.new(|cx| {
+                    SchematicEditor::new(Schematic::default(), SchematicView::default(), cx)
+                });
+                editor.read(cx).focus_handle(cx).focus(window, cx);
+                editor
+            },
+        )
+        .expect("test window")
+    });
+    let visual = VisualTestContext::from_window(window, cx);
+    visual.run_until_parked();
+    (editor, visual)
+}
+
+/// D22: P in the editor opens the library in a window of its own, centred
+/// over the editor's window, which ignores keys meanwhile. The pick starts
+/// placing the part in the editor of the main window, which has the
+/// keyboard again.
+#[gpui_kit::test]
+fn a_library_pick_places_the_part_in_the_main_window(cx: &mut TestAppContext) {
+    let (editor, mut cx) = editor_window(cx);
+    let main = cx.window_handle();
+    let owner = cx.update(|window, _| window.bounds());
+    keys("p", &mut cx);
+    assert_eq!(cx.windows().len(), 2, "the library has a window of its own");
+    let library = cx.window_handle();
+    assert_ne!(library, main);
+    assert_eq!(cx.window_title().as_deref(), Some("Component Library"));
+    let bounds = cx.update(|window, _| window.bounds());
+    assert_eq!(bounds.center(), owner.center(), "centred over the editor");
+    assert!(cx.update(|window, _| window.is_resizable()), "resizable");
+
+    // Keys and clicks in the editor's window reach neither the editor nor
+    // the library; a click brings the library to the front.
+    let mut editor_cx = VisualTestContext::from_window(main, &cx.cx);
+    editor_cx.simulate_keystrokes("w escape");
+    editor_cx.run_until_parked();
+    let resistor = editor_cx
+        .debug_bounds("toolbar-part-r")
+        .expect("the toolbar's resistor")
+        .center();
+    editor_cx.simulate_mouse_move(resistor, None, Modifiers::default());
+    editor_cx.simulate_click(resistor, Modifiers::default());
+    editor_cx.run_until_parked();
+    assert_eq!(editor.read_with(&cx, |e, _| e.tool()), Tool::Select);
+    assert_eq!(
+        cx.update(|_, cx| cx.active_window()),
+        Some(library),
+        "the library came to the front"
+    );
+    assert!(is_shown("library-search", &mut cx), "still open");
+
+    type_query("capacitor", &mut cx);
+    press("enter", &mut cx);
+    assert_eq!(cx.windows(), vec![main], "the pick closed the library");
+    assert_eq!(
+        editor.read_with(&cx, |e, _| e.tool()),
+        Tool::Place(PartKind::Capacitor),
+        "placing in the main window's editor"
+    );
+    assert!(
+        cx.update(|window, cx| editor.read(cx).focus_handle(cx).is_focused(window)),
+        "the editor has the keyboard"
+    );
+    keys("escape", &mut cx);
+    assert_eq!(editor.read_with(&cx, |e, _| e.tool()), Tool::Select);
+}
+
+/// D22: the toolbar's Library button opens the library in a window of its
+/// own over the editor, whose window ignores the wheel meanwhile: the view
+/// does not move. A double click on a result places it in the editor of the
+/// main window, which has the keyboard again.
+#[gpui_kit::test]
+fn the_toolbar_opens_the_library_and_a_double_click_places(cx: &mut TestAppContext) {
+    use gpui_kit::{ScrollDelta, ScrollEvent};
+    let (editor, mut cx) = editor_window(cx);
+    let main = cx.window_handle();
+    click("toolbar-library", &mut cx);
+    assert_eq!(cx.windows().len(), 2, "the library has a window of its own");
+    assert_ne!(cx.window_handle(), main);
+    assert_eq!(cx.window_title().as_deref(), Some("Component Library"));
+
+    let mut editor_cx = VisualTestContext::from_window(main, &cx.cx);
+    let view = |cx: &VisualTestContext| {
+        editor.read_with(cx, |e, _| e.grid_to_window(xsim_project::Point::new(0, 0)))
+    };
+    let before = view(&cx);
+    assert!(before.is_some(), "the canvas is laid out");
+    let middle = editor_cx.update(|window, _| {
+        let size = window.viewport_size();
+        point(size.width / 2., size.height / 2.)
+    });
+    editor_cx.simulate_mouse_move(middle, None, Modifiers::default());
+    for delta in [
+        ScrollDelta::Lines(point(0., 3.)),
+        ScrollDelta::Pixels(point(px(40.), px(-120.))),
+    ] {
+        for modifiers in [Modifiers::default(), Modifiers::control()] {
+            editor_cx.simulate_event(ScrollEvent {
+                position: middle,
+                delta,
+                modifiers,
+                ..ScrollEvent::default()
+            });
+        }
+    }
+    editor_cx.run_until_parked();
+    assert_eq!(view(&cx), before, "the wheel moved nothing");
+
+    double_click("library-item-Capacitor", &mut cx);
+    assert_eq!(cx.windows(), vec![main], "the pick closed the library");
+    assert_eq!(
+        editor.read_with(&cx, |e, _| e.tool()),
+        Tool::Place(PartKind::Capacitor),
+        "placing in the main window's editor"
+    );
+    assert!(
+        cx.update(|window, cx| editor.read(cx).focus_handle(cx).is_focused(window)),
+        "the editor has the keyboard"
+    );
+    // The wheel works again.
+    cx.simulate_event(ScrollEvent {
+        position: middle,
+        delta: ScrollDelta::Lines(point(0., 3.)),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert_ne!(view(&cx), before, "the wheel moves the view again");
 }

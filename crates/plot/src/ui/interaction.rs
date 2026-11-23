@@ -18,6 +18,10 @@
 //! other button (left or middle) meanwhile does nothing, so the drag goes
 //! on, ends with its own button's release, and Escape still knows where it
 //! began.
+//!
+//! The dividers between panes (D23, `super::divider`) start their own
+//! drag; Escape during it puts the heights back, and the setup changes
+//! once, when it ends.
 
 use super::state::{Drag, DragOrigin, Hover, PaneGeometry};
 use crate::WaveformViewer;
@@ -135,6 +139,11 @@ impl WaveformViewer {
             return;
         };
         if event.pressed_button.is_none() {
+            // The release was missed (outside the window): a divider keeps
+            // where it was dragged to, as on release.
+            if matches!(drag, Drag::Divider { .. }) {
+                self.commit_resize(cx);
+            }
             self.end_drag();
             cx.notify();
             return;
@@ -172,6 +181,7 @@ impl WaveformViewer {
                 });
             }
             Drag::Cursor(id) => self.move_cursor_x(id, position),
+            Drag::Divider { start, .. } => self.move_divider(position.y - start),
         }
         cx.notify();
     }
@@ -187,13 +197,16 @@ impl WaveformViewer {
         if self.dragging_with_another_button(MouseButton::Left) {
             return;
         }
+        if matches!(self.view.drag, Some(Drag::Divider { .. })) {
+            self.commit_resize(cx);
+        }
         let Some(drag) = self.end_drag() else {
             return;
         };
         match drag {
             Drag::Zoom { pane, start, .. } => self.box_zoom(pane, start, position, cx),
             Drag::Pending { pane, .. } => self.click(pane, position),
-            Drag::Pan { .. } | Drag::Cursor(_) => {}
+            Drag::Pan { .. } | Drag::Cursor(_) | Drag::Divider { .. } => {}
         }
         cx.notify();
     }
@@ -240,14 +253,15 @@ impl WaveformViewer {
                 self.view.cursors.first = origin.cursors.first;
                 self.view.cursors.second = origin.cursors.second;
             }
-            // Nothing is applied before the release.
-            Drag::Pending { .. } | Drag::Zoom { .. } => {}
+            // Nothing is applied before the release; a divider's heights
+            // go with the drag (`end_drag`).
+            Drag::Pending { .. } | Drag::Zoom { .. } | Drag::Divider { .. } => {}
         }
     }
 
     /// Starts `drag`, begun by a press of `button`, remembering what it may
     /// change.
-    fn begin_drag(&mut self, drag: Drag, button: MouseButton) {
+    pub(super) fn begin_drag(&mut self, drag: Drag, button: MouseButton) {
         self.view.drag = Some(drag);
         self.view.drag_origin = Some(DragOrigin::of(button, &self.setup, self.view.cursors));
     }
@@ -256,7 +270,7 @@ impl WaveformViewer {
     /// progress. Presses and releases of `button` then leave it alone, so
     /// a second button can neither take the drag over (and lose where it
     /// began) nor end it.
-    fn dragging_with_another_button(&self, button: MouseButton) -> bool {
+    pub(super) fn dragging_with_another_button(&self, button: MouseButton) -> bool {
         self.view.drag.is_some()
             && self
                 .view
@@ -265,9 +279,11 @@ impl WaveformViewer {
                 .is_some_and(|origin| origin.button != button)
     }
 
-    /// Ends the drag in progress, if any, and forgets where it began.
-    fn end_drag(&mut self) -> Option<Drag> {
+    /// Ends the drag in progress, if any, and forgets where it began and
+    /// the heights a divider drag had not stored yet.
+    pub(super) fn end_drag(&mut self) -> Option<Drag> {
         self.view.drag_origin = None;
+        self.view.resize = None;
         self.view.drag.take()
     }
 

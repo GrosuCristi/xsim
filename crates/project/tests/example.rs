@@ -101,7 +101,20 @@ fn assert_step_response(project: &Project, probe: xsim_project::Point) {
 #[test]
 fn example_simulates_to_the_analytic_step_response() {
     let project = Project::load(&example_path()).unwrap().project;
-    assert_step_response(&project, P(12, 2));
+    assert_step_response(&project, P(24, 4));
+}
+
+/// The example as schema 2 wrote it, before D22 halved the grid unit: it
+/// migrates to exactly the current example, so it simulates the same.
+#[test]
+fn the_schema2_example_migrates_to_the_current_example() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/schema2_rc_lowpass.xsim_proj");
+    let loaded = Project::load(&path).unwrap();
+    assert_eq!(loaded.compatibility, Compatibility::Migrated { from: 2 });
+    assert_eq!(loaded.project, rc_low_pass());
+    assert_eq!(loaded.project.to_json(), rc_low_pass().to_json());
+    assert_step_response(&loaded.project, P(24, 4));
 }
 
 #[test]
@@ -110,7 +123,7 @@ fn schema1_fixture_migrates_and_simulates_to_the_same_response() {
         .join("tests/fixtures/schema1_rc_lowpass.xsim_proj");
     let loaded = Project::load(&path).unwrap();
     assert_eq!(loaded.compatibility, Compatibility::Migrated { from: 1 });
-    assert_step_response(&loaded.project, P(12, 2));
+    assert_step_response(&loaded.project, P(24, 4));
 }
 
 #[test]

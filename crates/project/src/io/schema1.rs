@@ -1,13 +1,19 @@
 //! Migration from schema 1, the format of the first (linear-only) prototype.
 //!
+//! The result is a schema-2 document, which the schema-2 migration then
+//! lifts to the current schema (doubling every coordinate, D22).
+//!
 //! What carries over:
 //! * parts (R, C, L, V, I, ground) with their value, position, rotation and
-//!   mirroring — the prototype used the same symbol pin layout and the same
-//!   transform, so every pin stays where it was;
+//!   mirroring — the prototype used the symbol pin layout and transform of
+//!   schema 2, so every pin stays where it was;
 //! * wires (consecutive duplicate points, which the prototype tolerated,
 //!   are collapsed);
 //! * the analysis, which becomes the selected [`SimulationSetup`] choice;
 //! * the plot's visible x and y ranges and the diagnostics dock state.
+//!
+//! The prototype stored no view, so the schematic opens at the default
+//! view, fitted to the drawing.
 //!
 //! What is approximated:
 //! * A prototype source value was at once its DC value, its in-phase AC
@@ -31,20 +37,19 @@
 //!   application settings now, not part of a project.
 
 use crate::document::{
-    AnalysisChoice, CircuitDocument, PlotPane, PlotSetup, Project, SchematicView, SimulationSetup,
-    WorkspaceLayout,
+    AnalysisChoice, CircuitDocument, PlotPane, PlotSetup, Project, SimulationSetup, WorkspaceLayout,
 };
 use crate::error::ProjectError;
-use crate::io::SCHEMA_VERSION;
 use crate::schematic::{Component, Id, Orientation, Part, Point, Schematic, Wire};
 use serde::Deserialize;
 use serde_json::Value;
 use xsim_spice_engine::{AcSweep, DcSweep, InitialState, Source, SweepScale, Transient};
 
+/// The schema-2 project equivalent to the schema-1 document `value`.
 pub(super) fn migrate(value: &Value) -> Result<Project, ProjectError> {
     let old = ProjectV1::deserialize(value)?;
     Ok(Project {
-        schema_version: SCHEMA_VERSION,
+        schema_version: 2,
         name: old.name,
         circuits: old.circuits.into_iter().map(CircuitV1::migrate).collect(),
         active_circuit: old.active_circuit,
@@ -146,7 +151,7 @@ impl CircuitV1 {
         CircuitDocument {
             name: self.name,
             schematic: self.schematic.migrate(),
-            view: SchematicView::default(),
+            view: super::schema2::default_view(),
             simulation: self.analysis.migrate(),
             plot: PlotSetup {
                 panes: vec![PlotPane {

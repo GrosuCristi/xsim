@@ -286,7 +286,7 @@ mod tests {
             let c = Component {
                 id,
                 name: name.into(),
-                position: Point::new(10 * index as i32, 0),
+                position: Point::new(20 * index as i32, 0),
                 orientation: Orientation::default(),
                 part,
             };

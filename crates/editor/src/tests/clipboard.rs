@@ -22,7 +22,7 @@ fn copy_and_paste_between_two_editors(cx: &mut TestAppContext) {
     source.keys(&primary("a"));
     source.keys(&primary("c"));
     target.focus();
-    let p = target.at(0, 12);
+    let p = target.at(0, 24);
     target.hover(p);
     target.keys(&primary("v"));
     let s = target.schematic();
@@ -44,7 +44,7 @@ fn copy_and_paste_between_two_editors(cx: &mut TestAppContext) {
         .expect("pasted resistor");
     assert_eq!(
         pasted_r.position,
-        Point::new(0, 12 - 4),
+        Point::new(0, 24 - 8),
         "centred under the mouse"
     );
     assert_eq!(
@@ -91,7 +91,7 @@ fn duplicate_offsets_the_copy(cx: &mut TestAppContext) {
     let copy = &s.components[2];
     assert_eq!(
         (copy.name.as_str(), copy.position),
-        ("R3", Point::new(2, 2))
+        ("R3", Point::new(4, 4))
     );
     h.close();
 }

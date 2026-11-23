@@ -6,8 +6,10 @@
 //! parts, wires, labels, plot panes, traces) are left out, and fields it
 //! cannot read fall back to their defaults; a result's circuit fingerprint
 //! this version cannot read becomes one that never matches, so the result
-//! shows as out of date (INT-1). The project keeps the newer
-//! `schema_version`, so it cannot be saved over the original by accident.
+//! shows as out of date (INT-1), and a plot pane height it cannot use (not
+//! a positive finite number, D23) becomes the default. The project keeps
+//! the newer `schema_version`, so it cannot be saved over the original by
+//! accident.
 
 use crate::document::{
     CircuitDocument, PlotPane, PlotSetup, Project, SimulationSetup, StoredResult,
@@ -31,7 +33,21 @@ pub(super) fn parse(value: &Value, version: u32) -> Result<Project, ProjectError
     {
         stored.forget_unreadable_fingerprint();
     }
+    for pane in project
+        .circuits
+        .iter_mut()
+        .flat_map(|c| c.plot.panes.iter_mut())
+    {
+        forget_unreadable_height(pane);
+    }
     Ok(project)
+}
+
+/// A pane height this version cannot use (zero, negative or infinite, D23)
+/// falls back to the default, so the file still opens, with that pane at
+/// the default height.
+fn forget_unreadable_height(pane: &mut PlotPane) {
+    pane.height = pane.height.filter(|&h| PlotPane::is_valid_height(h));
 }
 
 fn project(fields: &Map<String, Value>) -> Result<Project, ProjectError> {
@@ -136,6 +152,7 @@ fn pane(value: &Value) -> Option<PlotPane> {
         x_log: field(fields, "x_log").unwrap_or(defaults.x_log),
         y_scale: field(fields, "y_scale").unwrap_or(defaults.y_scale),
         y2_range: field(fields, "y2_range").unwrap_or(defaults.y2_range),
+        height: field(fields, "height").unwrap_or(defaults.height),
     })
 }
 

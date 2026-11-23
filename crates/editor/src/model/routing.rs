@@ -70,17 +70,22 @@ pub fn first_leg(previous: Option<(Point, Point)>, start_axis: Option<Axis>, del
     start_axis.unwrap_or_else(|| Axis::dominant(delta))
 }
 
+/// Shortest run along the axis, in grid units, that a Z jog splits into two
+/// legs with the middle leg between them (two grid units each side).
+const MIN_Z_SPAN: i32 = 4;
+
 /// A connection between a moved point and a fixed one that stays orthogonal:
 /// a Z with both ends running along `axis` when there is room for the middle
-/// leg, else an L that keeps `axis` at the fixed end. Returns the points
-/// strictly between `moved` and `fixed`.
+/// leg (at least [`MIN_Z_SPAN`] along `axis`), else an L that keeps `axis`
+/// at the fixed end. Returns the points strictly between `moved` and
+/// `fixed`.
 pub fn reconnect(moved: Point, fixed: Point, axis: Axis) -> Vec<Point> {
     match axis {
         Axis::Horizontal if moved.y == fixed.y => Vec::new(),
         Axis::Vertical if moved.x == fixed.x => Vec::new(),
         Axis::Horizontal => {
             let span = fixed.x - moved.x;
-            if span.abs() >= 2 {
+            if span.abs() >= MIN_Z_SPAN {
                 let mid = moved.x + span / 2;
                 vec![Point::new(mid, moved.y), Point::new(mid, fixed.y)]
             } else {
@@ -89,7 +94,7 @@ pub fn reconnect(moved: Point, fixed: Point, axis: Axis) -> Vec<Point> {
         }
         Axis::Vertical => {
             let span = fixed.y - moved.y;
-            if span.abs() >= 2 {
+            if span.abs() >= MIN_Z_SPAN {
                 let mid = moved.y + span / 2;
                 vec![Point::new(moved.x, mid), Point::new(fixed.x, mid)]
             } else {
@@ -137,12 +142,20 @@ mod tests {
 
     #[test]
     fn reconnection_keeps_both_ends_along_the_axis_when_there_is_room() {
-        let z = reconnect(Point::new(2, -2), Point::new(6, 0), Axis::Horizontal);
-        assert_eq!(z, vec![Point::new(4, -2), Point::new(4, 0)]);
-        let l = reconnect(Point::new(5, -2), Point::new(6, 0), Axis::Horizontal);
-        assert_eq!(l, vec![Point::new(5, 0)]);
-        let v = reconnect(Point::new(3, 0), Point::new(0, 5), Axis::Vertical);
-        assert_eq!(v, vec![Point::new(3, 2), Point::new(0, 2)]);
-        assert!(reconnect(Point::new(9, 0), Point::new(6, 0), Axis::Horizontal).is_empty());
+        let z = reconnect(Point::new(4, -4), Point::new(12, 0), Axis::Horizontal);
+        assert_eq!(z, vec![Point::new(8, -4), Point::new(8, 0)]);
+        let l = reconnect(Point::new(10, -4), Point::new(12, 0), Axis::Horizontal);
+        assert_eq!(l, vec![Point::new(10, 0)]);
+        let v = reconnect(Point::new(6, 0), Point::new(0, 10), Axis::Vertical);
+        assert_eq!(v, vec![Point::new(6, 5), Point::new(0, 5)]);
+        assert!(reconnect(Point::new(18, 0), Point::new(12, 0), Axis::Horizontal).is_empty());
+        // D22: the middle leg keeps two grid units (one schema-2 unit) from
+        // each end, and can now sit half-way between schema-2 units.
+        let z = reconnect(Point::new(0, 0), Point::new(4, 3), Axis::Horizontal);
+        assert_eq!(z, vec![Point::new(2, 0), Point::new(2, 3)]);
+        let l = reconnect(Point::new(0, 0), Point::new(3, 3), Axis::Horizontal);
+        assert_eq!(l, vec![Point::new(0, 3)]);
+        let odd = reconnect(Point::new(0, 0), Point::new(7, 1), Axis::Horizontal);
+        assert_eq!(odd, vec![Point::new(3, 0), Point::new(3, 1)]);
     }
 }

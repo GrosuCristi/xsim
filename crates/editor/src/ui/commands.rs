@@ -15,7 +15,7 @@ use std::sync::Arc;
 use xsim_project::{Connectivity, Point, Schematic, connectivity};
 
 /// Offset of duplicated objects, in grid units.
-const DUPLICATE_OFFSET: Point = Point::new(2, 2);
+const DUPLICATE_OFFSET: Point = Point::new(4, 4);
 
 impl SchematicEditor {
     /// Applies `edit` to a copy of the schematic and commits the result as
@@ -172,8 +172,9 @@ impl SchematicEditor {
         }
     }
 
-    /// Arrow keys: move the selection one grid step (wires stretch as when
-    /// dragging), or scroll the view when nothing is selected.
+    /// Arrow keys: move the selection one grid unit, to the next dot (wires
+    /// stretch as when dragging), or scroll the view when nothing is
+    /// selected.
     pub(crate) fn nudge(&mut self, dx: i32, dy: i32, cx: &mut Context<Self>) {
         const PAN_STEP: f32 = 64.0;
         if self.selection.is_empty() || self.read_only {

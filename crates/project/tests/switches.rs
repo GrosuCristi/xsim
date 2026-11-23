@@ -72,36 +72,42 @@ fn switches(gate: f64, sense: f64) -> Schematic {
         &mut s,
         "R1",
         Part::Resistor { resistance: 1e3 },
-        (10, 0),
+        (20, 0),
         &nets("vcc", "o"),
     );
     place(
         &mut s,
         "S1",
         Part::default_for(PartKind::VoltageSwitch),
-        (20, 0),
+        (40, 0),
         &["o", "0", "g", "0"],
     );
-    place(&mut s, "VG", voltage(gate), (30, 0), &nets("g", "0"));
+    place(&mut s, "VG", voltage(gate), (60, 0), &nets("g", "0"));
     place(
         &mut s,
         "R2",
         Part::Resistor { resistance: 1e3 },
-        (40, 0),
+        (80, 0),
         &nets("vcc", "p"),
     );
-    place(&mut s, "W1", current_switch("VS"), (50, 0), &nets("p", "0"));
+    place(
+        &mut s,
+        "W1",
+        current_switch("VS"),
+        (100, 0),
+        &nets("p", "0"),
+    );
     place(
         &mut s,
         "I1",
         Part::CurrentSource {
             source: Source::dc(sense),
         },
-        (60, 0),
+        (120, 0),
         &nets("0", "x"),
     );
-    place(&mut s, "VS", voltage(0.0), (70, 0), &nets("x", "0"));
-    place(&mut s, "GND1", Part::Ground, (80, 0), &["0"]);
+    place(&mut s, "VS", voltage(0.0), (140, 0), &nets("x", "0"));
+    place(&mut s, "GND1", Part::Ground, (160, 0), &["0"]);
     s
 }
 
@@ -163,21 +169,21 @@ fn the_voltage_switch_has_four_named_pins_and_the_current_switch_two() {
     assert_eq!(
         s.pins,
         [
-            Point::new(2, -2),
-            Point::new(2, 2),
-            Point::new(-2, -1),
-            Point::new(-2, 1)
+            Point::new(4, -4),
+            Point::new(4, 4),
+            Point::new(-4, -2),
+            Point::new(-4, 2)
         ]
     );
     assert_eq!(s.pin_names, ["P", "N", "C+", "C−"]);
     let w = symbols::geometry(PartKind::CurrentSwitch);
-    assert_eq!(w.pins, [Point::new(-2, 0), Point::new(2, 0)]);
+    assert_eq!(w.pins, [Point::new(-4, 0), Point::new(4, 0)]);
     assert_eq!(w.pin_names, ["P", "N"]);
     // Pins follow the placement transform like every other symbol.
     let placed = Component {
         id: 1,
         name: "S1".into(),
-        position: Point::new(10, 20),
+        position: Point::new(20, 40),
         orientation: Orientation {
             rotation: 1,
             ..Orientation::default()
@@ -187,13 +193,13 @@ fn the_voltage_switch_has_four_named_pins_and_the_current_switch_two() {
     assert_eq!(
         placed.pins(),
         [
-            Point::new(12, 22),
-            Point::new(8, 22),
-            Point::new(11, 18),
-            Point::new(9, 18)
+            Point::new(24, 44),
+            Point::new(16, 44),
+            Point::new(22, 36),
+            Point::new(18, 36)
         ]
     );
-    assert_eq!(placed.bounds(), (Point::new(8, 18), Point::new(12, 22)));
+    assert_eq!(placed.bounds(), (Point::new(16, 36), Point::new(24, 44)));
 }
 
 // ------------------------------------------------------------ netlisting
@@ -277,8 +283,8 @@ fn oriented(local: Point, orientation: Orientation) -> Point {
 #[test]
 fn rotated_and_mirrored_switches_keep_their_terminals() {
     // Hand-computed for one turn of each mirror: mirror x then three
-    // quarter turns, and mirror y then one, both put P at (−2, 2), N at
-    // (2, 2), C+ at (−1, −2) and C− at (1, −2).
+    // quarter turns, and mirror y then one, both put P at (−4, 4), N at
+    // (4, 4), C+ at (−2, −4) and C− at (2, −4).
     for orientation in [
         Orientation {
             rotation: 3,
@@ -295,7 +301,7 @@ fn rotated_and_mirrored_switches_keep_their_terminals() {
         let placed: Vec<Point> = local.iter().map(|&p| oriented(p, orientation)).collect();
         assert_eq!(
             placed,
-            [P(-2, 2), P(2, 2), P(-1, -2), P(1, -2)],
+            [P(-4, 4), P(4, 4), P(-2, -4), P(2, -4)],
             "{orientation:?}"
         );
     }
@@ -319,32 +325,32 @@ fn rotated_and_mirrored_switches_keep_their_terminals() {
                     &mut s,
                     "R1",
                     Part::Resistor { resistance: 1e3 },
-                    (10, 0),
+                    (20, 0),
                     &["vcc", "o"],
                 );
                 place(
                     &mut s,
                     "R2",
                     Part::Resistor { resistance: 1e3 },
-                    (20, 0),
+                    (40, 0),
                     &["m", "0"],
                 );
                 // C− sits at 2 V, C+ at 2 V + drive: the control is the
                 // difference, whatever the voltages to ground.
-                place(&mut s, "VG", gate(drive), (30, 0), &["g", "h"]);
-                place(&mut s, "VH", gate(2.0), (40, 0), &["h", "0"]);
+                place(&mut s, "VG", gate(drive), (60, 0), &["g", "h"]);
+                place(&mut s, "VH", gate(2.0), (80, 0), &["h", "0"]);
                 place(
                     &mut s,
                     "R3",
                     Part::Resistor { resistance: 1e3 },
-                    (50, 0),
+                    (100, 0),
                     &["vcc", "q"],
                 );
                 place(
                     &mut s,
                     "R4",
                     Part::Resistor { resistance: 1e3 },
-                    (60, 0),
+                    (120, 0),
                     &["r", "0"],
                 );
                 place(
@@ -353,19 +359,19 @@ fn rotated_and_mirrored_switches_keep_their_terminals() {
                     Part::CurrentSource {
                         source: Source::dc(2e-3),
                     },
-                    (70, 0),
+                    (140, 0),
                     &["0", "x"],
                 );
-                place(&mut s, "VS", voltage(0.0), (80, 0), &["x", "0"]);
-                place(&mut s, "GND1", Part::Ground, (90, 0), &["0"]);
+                place(&mut s, "VS", voltage(0.0), (160, 0), &["x", "0"]);
+                place(&mut s, "GND1", Part::Ground, (180, 0), &["0"]);
                 for (name, part, at, nets) in [
                     (
                         "S1",
                         Part::default_for(PartKind::VoltageSwitch),
-                        P(0, 20),
+                        P(0, 40),
                         &["o", "m", "g", "h"][..],
                     ),
-                    ("W1", current_switch("VS"), P(20, 20), &["q", "r"][..]),
+                    ("W1", current_switch("VS"), P(40, 40), &["q", "r"][..]),
                 ] {
                     let pins = symbols::geometry(part.kind()).pins;
                     for (&pin, net) in pins.iter().zip(nets) {
@@ -517,7 +523,7 @@ fn projects_with_switches_round_trip_byte_identically() {
                 vh: -0.125,
             },
         },
-        (0, 40),
+        (0, 80),
         3,
     );
     sketch.part(
@@ -531,7 +537,7 @@ fn projects_with_switches_round_trip_byte_identically() {
                 ih: 1e-300,
             },
         },
-        (10, 40),
+        (20, 80),
         2,
     );
     s = sketch.schematic;

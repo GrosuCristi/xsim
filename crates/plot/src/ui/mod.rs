@@ -1,10 +1,13 @@
-//! The GPUI view: toolbar, stacked panes, cursor readout, measurements
-//! panel, operating-point table and empty state.
+//! The GPUI view: toolbar, stacked panes with the dividers between them
+//! (D23), cursor readout, the "Add pane" strip at the bottom (D22),
+//! measurements panel, operating-point table and empty state.
 
 pub mod actions;
 mod canvas;
 mod cursor;
+mod divider;
 mod empty;
+mod footer;
 mod interaction;
 mod legend;
 mod measurements;
@@ -20,6 +23,7 @@ mod trace_input;
 mod tests;
 
 use crate::WaveformViewer;
+use crate::model::heights;
 use crate::model::op_table::is_operating_point;
 use crate::scene::layout::{RIGHT_GUTTER, Style, y_gutter, y2_gutter};
 use actions::{CONTEXT, CancelInteraction, CopyPlot, RemoveSelectedTrace, ZoomToFit};
@@ -75,6 +79,21 @@ pub fn render(
         )
         .child(toolbar::toolbar(viewer, window, cx))
         .child(body(viewer, window, cx))
+        .when(
+            matches!(viewer.view.drag, Some(state::Drag::Divider { .. })),
+            |el| el.child(resize_pointer()),
+        )
+}
+
+/// Keeps the row-resize pointer over the whole window while a divider is
+/// dragged (D23), wherever the pointer goes.
+fn resize_pointer() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| window.set_window_cursor_style(CursorStyle::ResizeRow),
+    )
+    .absolute()
+    .size_0()
 }
 
 /// Empty state, operating-point table, or the plot panes.
@@ -86,6 +105,8 @@ fn body(viewer: &WaveformViewer, window: &Window, cx: &mut Context<WaveformViewe
     }
 }
 
+/// The pane stack, the cursor readout and the "Add pane" strip at the very
+/// bottom (D22), with the measurements panel beside them.
 fn plot_area(
     viewer: &WaveformViewer,
     window: &Window,
@@ -102,11 +123,36 @@ fn plot_area(
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
-                .children((0..layout.count).map(|i| pane::pane(viewer, i, layout, cx)))
-                .children(readout::readout(viewer, cx)),
+                .child(pane_stack(viewer, layout, cx))
+                .children(readout::readout(viewer, cx))
+                .child(footer::footer(viewer, cx)),
         )
         .children(measurements::panel(viewer, cx))
         .into_any_element()
+}
+
+/// The panes, sharing the height left by the readout and the bottom strip
+/// in proportion to their weights (D23), so a taller or shorter dock scales
+/// them all alike. A pane never gets shorter than its minimum, so with more
+/// panes than fit the stack scrolls (over a pane's header; the wheel over a
+/// plot zooms).
+fn pane_stack(
+    viewer: &WaveformViewer,
+    layout: PaneLayout,
+    cx: &mut Context<WaveformViewer>,
+) -> impl IntoElement {
+    let grow = heights::grow_factors(&viewer.pane_weights());
+    v_flex()
+        .id("waveform-panes")
+        .debug_selector(|| "waveform-panes".into())
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(&viewer.view.panes_scroll)
+        .children((0..layout.count).map(|i| {
+            let grow = grow.get(i).copied().unwrap_or(1.0);
+            pane::pane(viewer, i, layout, grow, cx)
+        }))
 }
 
 /// The y-label gutters every pane shares, so their x axes line up: left

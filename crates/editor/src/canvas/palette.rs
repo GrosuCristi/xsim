@@ -5,10 +5,8 @@ use gpui_kit::{Hsla, component::Theme};
 /// Colours used to paint the schematic.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    /// Whole-unit grid dots, where everything snaps.
+    /// Grid dots, every one a snap point (D22).
     pub grid: Hsla,
-    /// Half-unit grid dots (D14), fainter than the snap dots.
-    pub grid_half: Hsla,
     pub wire: Hsla,
     pub symbol: Hsla,
     pub pin_marker: Hsla,
@@ -31,7 +29,6 @@ impl Palette {
         let accent = theme.blue;
         Self {
             grid: theme.muted_foreground.opacity(0.5),
-            grid_half: theme.muted_foreground.opacity(0.3),
             wire: theme.green,
             symbol: theme.foreground,
             pin_marker: theme.muted_foreground,

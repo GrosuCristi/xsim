@@ -10,7 +10,7 @@ use crate::model::geometry::Vec2;
 use xsim_project::{Component, Point};
 
 /// Gap between the body and its text, in grid units.
-const GAP: f32 = 0.45;
+const GAP: f32 = 0.9;
 
 /// Side of the body the text block sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn text_sits_outside_the_body() {
         let p = place_text(&component(Part::Resistor { resistance: 1.0 }, 0, false));
-        assert!(p.anchor.y < -1.0);
+        assert!(p.anchor.y < -2.0, "above the body's top edge at y = -2");
         assert_eq!(p.anchor.x, 0.0);
     }
 }

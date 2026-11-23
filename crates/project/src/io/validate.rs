@@ -7,8 +7,8 @@
 //! simulates, so such a project can still be opened, viewed and fixed.
 
 use crate::document::{
-    CircuitDocument, MAX_FINGERPRINT_LEN, PlotSetup, Project, SchematicView, SimulationSetup,
-    StoredResult,
+    CircuitDocument, MAX_FINGERPRINT_LEN, PlotPane, PlotSetup, Project, SchematicView,
+    SimulationSetup, StoredResult,
 };
 use crate::error::ProjectError;
 use crate::schematic::{Part, Point, Schematic};
@@ -20,8 +20,9 @@ use xsim_spice_engine::{
 
 /// Largest accepted coordinate magnitude in grid units: far beyond any real
 /// drawing, and small enough that symbol offsets and editor moves cannot
-/// overflow `i32`.
-pub(crate) const MAX_COORDINATE: u32 = 100_000_000;
+/// overflow `i32`. It is the drawing area of schema 2 (±10⁸ units twice as
+/// large, D22), so every valid schema-2 file migrates to a valid one.
+pub(crate) const MAX_COORDINATE: u32 = 200_000_000;
 
 /// Checks the invariants every loaded or saved project must satisfy.
 pub(crate) fn validate(project: &Project) -> Result<(), ProjectError> {
@@ -151,7 +152,20 @@ fn check_plot(plot: &PlotSetup) -> Check {
         .iter()
         .flat_map(|p| p.x_range.into_iter().chain(p.y_range).chain(p.y2_range))
         .flatten();
-    finite("a plot range", ranges)
+    finite("a plot range", ranges)?;
+    // Pane heights are relative weights (D23): a zero, negative or infinite
+    // weight would give a pane no height or all of it.
+    for (index, pane) in plot.panes.iter().enumerate() {
+        if let Some(height) = pane.height
+            && !PlotPane::is_valid_height(height)
+        {
+            return Err(format!(
+                "plot pane {} has the height {height}, which is not a positive finite number",
+                index + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn check_result(result: &SimulationResult) -> Check {

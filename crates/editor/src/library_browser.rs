@@ -18,8 +18,11 @@
 //! Keyboard: the search field has the focus on opening; Up and Down move
 //! through the list and Enter picks. Tab reaches the category tree, where
 //! Up/Down walk the categories, Left/Right close and open them (or go up
-//! and down a level) and Enter or Space open and close one; then Cancel,
-//! Place and the close button, which Enter presses.
+//! and down a level) and Enter or Space open and close one; then Cancel and
+//! Place, which Enter presses. Escape closes the window.
+//!
+//! The library is a resizable window of its own (D22), opened from the
+//! editor's toolbar or P, and from a part's model field.
 
 mod browser;
 mod catalog;
@@ -34,7 +37,7 @@ mod search;
 mod tree;
 mod view;
 
-pub(crate) use keys::{ensure_key_bindings, on_close_button, pressable};
+pub(crate) use keys::{ensure_key_bindings, pressable};
 
 use gpui_kit::{App, Window};
 use std::rc::Rc;
@@ -179,7 +182,9 @@ pub(crate) fn model_summary(item: &LibraryItem) -> Option<ModelSummary> {
         })
 }
 
-/// Opens the library window as a dialog.
+/// Opens the library in its own modal window over `window` (D22, see
+/// [`crate::dialog_window`]). `on_pick` gets the picked item in `window`,
+/// once the library has closed.
 pub fn open_library(
     filter: LibraryFilter,
     on_pick: impl Fn(LibraryItem, &mut Window, &mut App) + 'static,

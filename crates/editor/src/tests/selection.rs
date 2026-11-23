@@ -15,16 +15,16 @@ fn clicking_selects_and_shift_click_toggles(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
     h.click(0, 0);
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(1)]);
-    h.click_with(8, 0, shift());
+    h.click_with(16, 0, shift());
     assert_eq!(
         h.read(|e| e.selection()),
         vec![ObjectRef::Component(1), ObjectRef::Component(2)]
     );
     h.click_with(0, 0, shift());
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(2)]);
-    h.click(4, 0);
+    h.click(8, 0);
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Wire(3)]);
-    h.click(4, 6);
+    h.click(8, 12);
     assert!(
         h.read(|e| e.selection()).is_empty(),
         "clicking empty canvas clears"
@@ -39,9 +39,9 @@ fn clicking_selects_and_shift_click_toggles(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn box_selection_encloses_left_to_right_and_touches_right_to_left(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    h.drag((-3, -2), (3, 2));
+    h.drag((-6, -4), (6, 4));
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(1)]);
-    h.drag((3, 2), (-3, -2));
+    h.drag((6, 4), (-6, -4));
     assert_eq!(
         h.read(|e| e.selection()),
         vec![ObjectRef::Component(1), ObjectRef::Wire(3)]
@@ -52,12 +52,12 @@ fn box_selection_encloses_left_to_right_and_touches_right_to_left(cx: &mut TestA
 #[gpui_kit::test]
 fn moving_a_part_stretches_its_wires_orthogonally_in_one_step(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    h.drag((0, 0), (0, -2));
+    h.drag((0, 0), (0, -4));
     let s = h.schematic();
-    assert_eq!(s.components[0].position, p(0, -2));
+    assert_eq!(s.components[0].position, p(0, -4));
     let w = &s.wires[0].points;
-    assert_eq!(w.first(), Some(&p(2, -2)));
-    assert_eq!(w.last(), Some(&p(6, 0)));
+    assert_eq!(w.first(), Some(&p(4, -4)));
+    assert_eq!(w.last(), Some(&p(12, 0)));
     assert!(
         w.windows(2).all(|s| s[0].x == s[1].x || s[0].y == s[1].y),
         "{w:?}"
@@ -74,13 +74,13 @@ fn moving_a_part_stretches_its_wires_orthogonally_in_one_step(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn box_selected_groups_move_together(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    h.drag((-3, -2), (11, 2));
+    h.drag((-6, -4), (22, 4));
     assert_eq!(h.read(|e| e.selection()).len(), 3);
-    h.drag((8, 0), (8, 3));
+    h.drag((16, 0), (16, 6));
     let s = h.schematic();
-    assert_eq!(s.components[0].position, p(0, 3));
-    assert_eq!(s.components[1].position, p(8, 3));
-    assert_eq!(s.wires[0].points, vec![p(2, 3), p(6, 3)]);
+    assert_eq!(s.components[0].position, p(0, 6));
+    assert_eq!(s.components[1].position, p(16, 6));
+    assert_eq!(s.wires[0].points, vec![p(4, 6), p(12, 6)]);
     h.close();
 }
 
@@ -117,7 +117,7 @@ fn delete_and_backspace_remove_the_selection(cx: &mut TestAppContext) {
     h.click(0, 0);
     h.keys("delete");
     assert_eq!(h.schematic().components.len(), 1);
-    h.click(4, 0);
+    h.click(8, 0);
     h.keys("backspace");
     assert!(h.schematic().wires.is_empty());
     h.close();
@@ -129,7 +129,7 @@ fn undo_and_redo_walk_a_chain_of_edits(cx: &mut TestAppContext) {
     assert!(!h.read(|e| e.can_undo()));
     h.click(0, 0);
     h.keys("delete");
-    h.click(8, 0);
+    h.click(16, 0);
     h.keys("r");
     let after = h.schematic();
     h.keys(&primary("z"));
@@ -175,7 +175,7 @@ fn read_only_mode_blocks_every_edit(cx: &mut TestAppContext) {
     assert!(h.control("read-only-badge").is_some());
     h.click(0, 0);
     h.keys(&format!("delete r x {} shift-r w", primary("v")));
-    let (a, b) = (h.at(0, 0), h.at(0, 3));
+    let (a, b) = (h.at(0, 0), h.at(0, 6));
     h.drag_px(a, b, MouseButton::Left, Modifiers::default());
     assert_eq!(h.schematic(), two_resistors());
     assert_eq!(h.read(|e| e.tool()), crate::Tool::Select);
@@ -233,6 +233,7 @@ fn arrow_keys_nudge_the_selection_or_scroll_the_view(cx: &mut TestAppContext) {
     h.click(0, 0);
     h.keys("left up");
     let s = h.schematic();
+    // One grid unit, the next dot, per key (D22).
     assert_eq!(s.components[0].position, p(-1, -1));
     assert!(
         s.wires[0]
@@ -247,6 +248,6 @@ fn arrow_keys_nudge_the_selection_or_scroll_the_view(cx: &mut TestAppContext) {
         "one step per key"
     );
     h.keys("escape escape right");
-    assert_eq!(h.read(|e| e.view()).center, [64.0 / 20.0, 0.0]);
+    assert_eq!(h.read(|e| e.view()).center, [64.0 / 10.0, 0.0]);
     h.close();
 }

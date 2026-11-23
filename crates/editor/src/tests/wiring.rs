@@ -14,26 +14,26 @@ fn points(s: &Schematic, index: usize) -> Vec<(i32, i32)> {
 fn wiring_two_pins_bends_once_and_connects_them(cx: &mut TestAppContext) {
     let mut s = two_resistors();
     s.wires.clear();
-    s.components[1].position = Point::new(8, 4);
+    s.components[1].position = Point::new(16, 8);
     let mut h = open(cx, s);
     h.keys("w");
     assert_eq!(h.read(|e| e.tool()), Tool::Wire);
-    h.click(2, 0);
-    let p = h.at(6, 4);
+    h.click(4, 0);
+    let p = h.at(12, 8);
     h.hover(p);
     assert_eq!(
         h.read(|e| e.wire_preview()),
-        vec![Point::new(2, 0), Point::new(6, 0), Point::new(6, 4)],
+        vec![Point::new(4, 0), Point::new(12, 0), Point::new(12, 8)],
         "the wire leaves the pin along its axis"
     );
-    h.click(6, 4);
+    h.click(12, 8);
     let s = h.schematic();
     assert_eq!(
         s.wires.len(),
         1,
         "clicking the second pin finishes the wire"
     );
-    assert_eq!(points(&s, 0), vec![(2, 0), (6, 0), (6, 4)]);
+    assert_eq!(points(&s, 0), vec![(4, 0), (12, 0), (12, 8)]);
     let c = connectivity(&s);
     assert_eq!(c.net_of_pin(1, 1), c.net_of_pin(2, 0));
     assert_eq!(
@@ -49,15 +49,15 @@ fn corners_are_added_by_clicking_and_enter_finishes(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("w");
     h.click(0, 0);
-    h.click(6, 0);
-    h.click(6, 5);
+    h.click(12, 0);
+    h.click(12, 10);
     assert!(
         h.schematic().wires.is_empty(),
         "nothing is committed while drawing"
     );
     h.keys("enter");
     let s = h.schematic();
-    assert_eq!(points(&s, 0), vec![(0, 0), (6, 0), (6, 5)]);
+    assert_eq!(points(&s, 0), vec![(0, 0), (12, 0), (12, 10)]);
     h.close();
 }
 
@@ -66,9 +66,9 @@ fn alt_draws_any_angle(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("w");
     h.click(0, 0);
-    h.click_with(4, 3, alt());
+    h.click_with(8, 6, alt());
     h.keys("enter");
-    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (4, 3)]);
+    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (8, 6)]);
     h.close();
 }
 
@@ -77,17 +77,17 @@ fn ending_on_a_wire_forms_a_t_junction_with_a_dot(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("w");
     h.click(0, 0);
-    h.click(8, 0);
+    h.click(16, 0);
     h.keys("enter");
-    h.click(4, 4);
-    h.click(4, 0);
+    h.click(8, 8);
+    h.click(8, 0);
     let s = h.schematic();
     assert_eq!(
         s.wires.len(),
         2,
         "landing on the first wire finishes the second"
     );
-    assert_eq!(connectivity(&s).junctions, vec![Point::new(4, 0)]);
+    assert_eq!(connectivity(&s).junctions, vec![Point::new(8, 0)]);
     h.close();
 }
 
@@ -95,15 +95,15 @@ fn ending_on_a_wire_forms_a_t_junction_with_a_dot(cx: &mut TestAppContext) {
 fn crossing_wires_do_not_connect(cx: &mut TestAppContext) {
     let mut s = two_resistors();
     s.wires.clear();
-    s.components[0].position = Point::new(0, -6);
-    s.components[1].position = Point::new(-6, 0);
+    s.components[0].position = Point::new(0, -12);
+    s.components[1].position = Point::new(-12, 0);
     let mut h = open(cx, s);
     h.keys("w");
-    h.click(2, -6);
-    h.click(2, 6);
+    h.click(4, -12);
+    h.click(4, 12);
     h.keys("enter");
-    h.click(-4, 0);
-    h.click(8, 0);
+    h.click(-8, 0);
+    h.click(16, 0);
     h.keys("enter");
     let s = h.schematic();
     assert_eq!(s.wires.len(), 2);
@@ -118,11 +118,11 @@ fn double_click_finishes_and_escape_cancels(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("w");
     h.click(0, 0);
-    let p = h.at(0, 6);
+    let p = h.at(0, 12);
     h.double_click_px(p);
-    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (0, 6)]);
-    h.click(3, 0);
-    h.click(3, 3);
+    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (0, 12)]);
+    h.click(6, 0);
+    h.click(6, 6);
     h.keys("escape");
     assert_eq!(
         h.schematic().wires.len(),
@@ -140,7 +140,7 @@ fn alt_pressed_in_place_switches_the_rubber_band_to_any_angle(cx: &mut TestAppCo
     let mut h = open(cx, Schematic::default());
     h.keys("w");
     h.click(0, 0);
-    let p = h.at(4, 3);
+    let p = h.at(8, 6);
     h.hover(p);
     assert_eq!(
         h.read(|e| e.wire_preview()).len(),
@@ -150,10 +150,10 @@ fn alt_pressed_in_place_switches_the_rubber_band_to_any_angle(cx: &mut TestAppCo
     h.cx.simulate_modifiers_change(alt());
     assert_eq!(
         h.read(|e| e.wire_preview()),
-        vec![Point::new(0, 0), Point::new(4, 3)]
+        vec![Point::new(0, 0), Point::new(8, 6)]
     );
     h.cx.simulate_click(p, alt());
     h.keys("enter");
-    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (4, 3)]);
+    assert_eq!(points(&h.schematic(), 0), vec![(0, 0), (8, 6)]);
     h.close();
 }

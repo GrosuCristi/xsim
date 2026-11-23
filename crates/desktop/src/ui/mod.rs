@@ -31,12 +31,6 @@ pub fn toast(note: impl Into<Notification>, window: &mut Window, cx: &mut App) {
     window.defer(cx, move |window, cx| window.push_notification(note, cx));
 }
 
-/// A dialog width of `rems` root ems, so dialogs grow with the interface
-/// scale (Q30).
-pub fn dialog_width(rems: f32, window: &Window) -> Pixels {
-    window.rem_size() * rems
-}
-
 /// A small round status dot.
 pub fn dot(color: Hsla) -> Div {
     div()

@@ -205,7 +205,7 @@ mod tests {
             let c = Component {
                 id,
                 name: name.to_string(),
-                position: Point::new(10 * i as i32, 0),
+                position: Point::new(20 * i as i32, 0),
                 orientation: Orientation::default(),
                 part,
             };

@@ -3,10 +3,11 @@
 
 use crate::model::axis::AxisMap;
 use crate::model::cursors::{CursorId, CursorTrace, Cursors};
+use crate::model::heights::DividerDrag;
 use crate::model::measurements::Measurement;
 use crate::model::setup::MoveRefusal;
 use crate::scene::lod::LodCache;
-use gpui_kit::{Bounds, MouseButton, Pixels, Point, SharedString, Task};
+use gpui_kit::{Bounds, MouseButton, Pixels, Point, ScrollHandle, SharedString, Task};
 use std::cell::RefCell;
 use std::rc::Rc;
 use xsim_project::PlotSetup;
@@ -59,6 +60,20 @@ pub enum Drag {
     Pan { pane: usize, last: Point<Pixels> },
     /// Moving a cursor's line along x (D19); its y follows the trace.
     Cursor(CursorId),
+    /// Moving the divider under pane `upper` (D23), pressed at window y
+    /// `start`; [`ViewState::resize`] holds the heights it reaches.
+    Divider { upper: usize, start: Pixels },
+}
+
+/// A divider drag in progress (D23). The panes are laid out with `live`
+/// while it lasts; the setup changes only on release.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneResize {
+    pub drag: DividerDrag,
+    /// The weights the panes are laid out with until the release.
+    pub live: Vec<f64>,
+    /// Whether the divider is away from where the press began.
+    pub moved: bool,
 }
 
 /// A stored axis range; `None` = automatic.
@@ -124,10 +139,17 @@ pub struct ViewState {
     pub drag: Option<Drag>,
     /// The view and cursors when `drag` began.
     pub drag_origin: Option<DragOrigin>,
+    /// The pane heights of a divider drag in progress (D23).
+    pub resize: Option<PaneResize>,
+    /// The divider under the pointer, by the pane above it.
+    pub divider_hover: Option<usize>,
     /// Cursor positions before a click moved one, so the double click that
     /// fits the view can put them back.
     pub cursors_before_click: Option<Cursors>,
     pub space_held: bool,
+    /// The scroll position of the pane stack, which scrolls when there are
+    /// more panes than fit (D22).
+    pub panes_scroll: ScrollHandle,
     pub geometry: Geometry,
     pub lod: Rc<RefCell<LodCache>>,
     /// The add-trace field, created on first render (it needs a window).
@@ -154,6 +176,8 @@ impl ViewState {
         self.hover = None;
         self.drag = None;
         self.drag_origin = None;
+        self.resize = None;
+        self.divider_hover = None;
         self.drop_target = None;
         self.cursors.first = None;
         self.cursors.second = None;

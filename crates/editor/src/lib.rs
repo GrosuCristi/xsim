@@ -47,7 +47,7 @@
 //!   is the wire tool's crosshair over such a pin and while drawing. A press
 //!   on the part body still selects and moves the part. Shift or Ctrl/Cmd
 //!   on a pin toggles the part's selection instead, a double-click on a pin
-//!   opens the part's properties, and zoomed out a press more than 0.4 grid
+//!   opens the part's properties, and zoomed out a press more than 0.8 grid
 //!   units from the pin acts on the part (so a ground symbol's bars move
 //!   it). A double-click whose first click finishes the wire on a pin,
 //!   wire or label only finishes it: its second press opens nothing. In a
@@ -86,6 +86,7 @@ extern crate gpui_kit as gpui;
 
 mod camera;
 mod canvas;
+pub mod dialog_window;
 pub mod library_browser;
 mod model;
 pub mod properties;

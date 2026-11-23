@@ -19,16 +19,29 @@ use xsim_spice_engine::{
 };
 
 /// Opens the component library from the toolbar, searches for `query` and
-/// picks the best match with Enter.
+/// picks the best match with Enter. The library is a window of its own
+/// (D22).
 fn pick_from_library(h: &mut Harness, query: &str) {
     h.click_control("toolbar-library");
     h.cx.run_until_parked();
-    assert!(h.control("library-search").is_some(), "the library opened");
-    h.type_text(query);
+    let owner = h.cx.update(|window, _| window.window_handle());
+    let dialog =
+        h.cx.update(|_, cx| crate::dialog_window::dialog_of(owner, cx))
+            .expect("the library opened in a window of its own");
+    let mut library = gpui_kit::VisualTestContext::from_window(dialog, &h.cx);
+    library.run_until_parked();
+    assert!(
+        library.debug_bounds("library-search").is_some(),
+        "the library opened"
+    );
+    library.simulate_input(query);
+    library.run_until_parked();
+    library.simulate_keystrokes("enter");
+    library.run_until_parked();
     h.cx.run_until_parked();
-    h.keys("enter");
-    h.cx.run_until_parked();
-    assert!(h.control("library-search").is_none(), "the pick closed it");
+    let open =
+        h.cx.update(|_, cx| crate::dialog_window::dialog_of(owner, cx));
+    assert!(open.is_none(), "the pick closed it");
 }
 
 /// D17: both switches are placed from the library window, with their
@@ -40,11 +53,11 @@ fn switches_are_placed_from_the_component_library(cx: &mut TestAppContext) {
     pick_from_library(&mut h, "voltage-controlled");
     assert_eq!(h.read(|e| e.tool()), Tool::Place(PartKind::VoltageSwitch));
     h.click(0, 0);
-    h.click(0, 6);
+    h.click(0, 12);
     h.keys("escape");
     pick_from_library(&mut h, "csw");
     assert_eq!(h.read(|e| e.tool()), Tool::Place(PartKind::CurrentSwitch));
-    h.click(10, 0);
+    h.click(20, 0);
     h.keys("escape");
     let s = h.schematic();
     let summary: Vec<(&str, &Part)> = s
@@ -61,15 +74,15 @@ fn switches_are_placed_from_the_component_library(cx: &mut TestAppContext) {
     assert_eq!(
         s.components[0].pins(),
         [
-            Point::new(2, -2),
-            Point::new(2, 2),
-            Point::new(-2, -1),
-            Point::new(-2, 1)
+            Point::new(4, -4),
+            Point::new(4, 4),
+            Point::new(-4, -2),
+            Point::new(-4, 2)
         ]
     );
     assert_eq!(
         s.components[2].pins(),
-        [Point::new(8, 0), Point::new(12, 0)]
+        [Point::new(16, 0), Point::new(24, 0)]
     );
     assert!(h.read(|e| e.can_undo()));
     h.close();
@@ -100,8 +113,8 @@ fn square(high: f64) -> Source {
 type BenchPart = (&'static str, (i32, i32), Part, &'static [&'static str]);
 
 /// Positions of the switches in [`bench`].
-const S1_AT: (i32, i32) = (10, -6);
-const W1_AT: (i32, i32) = (10, 6);
+const S1_AT: (i32, i32) = (20, -12);
+const W1_AT: (i32, i32) = (20, 12);
 
 /// Two switched loads, every pin joined by a net label:
 ///
@@ -116,7 +129,7 @@ fn bench() -> Schematic {
     let parts: [BenchPart; 9] = [
         (
             "Vdd",
-            (-20, -6),
+            (-40, -12),
             Part::VoltageSource {
                 source: Source::dc(1.0),
             },
@@ -124,13 +137,13 @@ fn bench() -> Schematic {
         ),
         (
             "Vctl",
-            (-10, -6),
+            (-20, -12),
             Part::VoltageSource {
                 source: square(1.0),
             },
             &["ctl", "0"],
         ),
-        ("R1", (0, -6), resistor.clone(), &["vdd", "out"]),
+        ("R1", (0, -12), resistor.clone(), &["vdd", "out"]),
         (
             "S1",
             S1_AT,
@@ -139,22 +152,22 @@ fn bench() -> Schematic {
         ),
         (
             "Vdrv",
-            (20, -6),
+            (40, -12),
             Part::VoltageSource {
                 source: square(2.0),
             },
             &["drv", "0"],
         ),
-        ("R2", (-20, 6), resistor.clone(), &["drv", "sense"]),
+        ("R2", (-40, 12), resistor.clone(), &["drv", "sense"]),
         (
             "Vsense",
-            (-10, 6),
+            (-20, 12),
             Part::VoltageSource {
                 source: Source::dc(0.0),
             },
             &["sense", "0"],
         ),
-        ("R3", (0, 6), resistor, &["vdd", "out2"]),
+        ("R3", (0, 12), resistor, &["vdd", "out2"]),
         ("W1", W1_AT, controlled_by("Vsense"), &["out2", "0"]),
     ];
     let mut s = Schematic::default();

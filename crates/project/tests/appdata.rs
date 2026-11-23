@@ -383,6 +383,32 @@ fn orphans_are_listed_oldest_first() {
     assert_eq!(names, ["second", "first"]);
 }
 
+/// D22: a snapshot an older xsim left behind holds a schema-2 project. It
+/// is recovered migrated, exactly as its file would open.
+#[test]
+fn snapshots_of_schema2_projects_are_recovered_migrated() {
+    const SCHEMA2: &str = include_str!("fixtures/schema2_mixed.xsim_proj");
+    let temp = tempfile::tempdir().unwrap();
+    let data = AppData::at(temp.path());
+    run_child("crash-with-snapshot", temp.path(), "old", None);
+    let orphan = data
+        .orphans()
+        .pop()
+        .expect("the crashed session is offered");
+    let project: serde_json::Value = serde_json::from_str(SCHEMA2).unwrap();
+    let snapshot = serde_json::json!({ "source": null, "project": project });
+    fs::write(orphan.dir.join("snapshot.json"), snapshot.to_string()).unwrap();
+
+    let recovered = data.orphans().pop().expect("the snapshot is readable");
+    let file = Project::from_json(SCHEMA2).unwrap();
+    assert_eq!(
+        file.compatibility,
+        xsim_project::Compatibility::Migrated { from: 2 }
+    );
+    assert_eq!(recovered.snapshot.project, file.project);
+    assert_eq!(recovered.snapshot.source, None);
+}
+
 #[test]
 fn crashed_sessions_without_a_snapshot_are_cleaned_up() {
     let temp = tempfile::tempdir().unwrap();

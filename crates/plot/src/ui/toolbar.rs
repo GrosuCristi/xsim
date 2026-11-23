@@ -1,6 +1,7 @@
-//! The viewer toolbar: add trace, add pane, cursors, measurements, the
-//! magnifier (box zoom) tool, zoom to fit, copy image and the export menu.
-//! Every button has a tooltip with its shortcut where there is one.
+//! The viewer toolbar: add trace, cursors, measurements, the magnifier (box
+//! zoom) tool, zoom to fit, copy image and the export menu. Every button has
+//! a tooltip with its shortcut where there is one. "Add pane" is the plus
+//! at the bottom of the dock instead (D22, `footer`).
 
 use super::actions::{CONTEXT, CopyPlot, ZoomToFit};
 use super::trace_input::trace_input;
@@ -28,6 +29,7 @@ pub fn toolbar(
         .is_some_and(|r| !is_operating_point(r));
     h_flex()
         .id("waveform-toolbar")
+        .debug_selector(|| "waveform-toolbar".into())
         .h(rems(HEIGHT))
         .flex_shrink_0()
         .px_2()
@@ -36,7 +38,6 @@ pub fn toolbar(
         .border_color(theme.border)
         .child(trace_input(viewer, window, cx))
         .child(divider(cx))
-        .child(add_pane_button(plotting, cx))
         .child(cursors_button(viewer, plotting, cx))
         .child(measurements_button(viewer, plotting, cx))
         .child(magnifier_button(viewer, plotting, cx))
@@ -64,19 +65,6 @@ fn divider(cx: &App) -> impl IntoElement {
 /// An icon button wrapped so tests can find it by `selector`.
 fn tool(selector: &'static str, button: impl IntoElement) -> impl IntoElement {
     div().debug_selector(move || selector.into()).child(button)
-}
-
-fn add_pane_button(enabled: bool, cx: &mut Context<WaveformViewer>) -> impl IntoElement {
-    tool(
-        "add-pane",
-        Button::new("add-pane")
-            .ghost()
-            .small()
-            .icon(Lucide::Rows2)
-            .tooltip("Add pane")
-            .disabled(!enabled)
-            .on_click(cx.listener(|this, _, _, cx| this.add_pane(cx))),
-    )
 }
 
 fn cursors_button(

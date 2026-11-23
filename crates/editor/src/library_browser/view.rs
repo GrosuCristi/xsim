@@ -5,8 +5,8 @@
 use super::browser::Browser;
 use super::catalog::Catalog;
 use super::{LibraryFilter, LibraryItem};
+use crate::dialog_window;
 use gpui_kit::component::{
-    WindowExt as _,
     input::{InputEvent, InputState, MoveDown, MoveUp},
     v_flex,
 };
@@ -33,9 +33,6 @@ pub(crate) struct LibraryView {
     /// field) and scroll position.
     pub(super) tree_focus: FocusHandle,
     pub(super) tree_scroll: ScrollHandle,
-    /// Tracks the whole content, so the dialog can tell a focused control of
-    /// the window from its own close button.
-    focus: FocusHandle,
     on_pick: PickHandler,
     _search_events: Subscription,
 }
@@ -63,7 +60,6 @@ impl LibraryView {
             results_scroll: ScrollHandle::new(),
             tree_focus: cx.focus_handle().tab_stop(true),
             tree_scroll: ScrollHandle::new(),
-            focus: cx.focus_handle(),
             on_pick,
             _search_events: search_events,
         };
@@ -164,14 +160,9 @@ impl LibraryView {
     /// Closes the dialog and reports the selected item.
     pub(super) fn pick_and_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((on_pick, item)) = self.picked() {
-            window.close_dialog(cx);
-            on_pick(item, window, cx);
+            super::dialog::deliver(on_pick, item, window, cx);
+            dialog_window::close(window, cx);
         }
-    }
-
-    /// Whether the keyboard is on the dialog's own close button.
-    pub(crate) fn on_close_button(&self, window: &Window, cx: &App) -> bool {
-        super::keys::on_close_button(&self.focus, window, cx)
     }
 
     pub(crate) fn focus_search(&self, window: &mut Window, cx: &mut App) {
@@ -182,18 +173,16 @@ impl LibraryView {
 
 impl Render for LibraryView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rem = window.rem_size();
-        let available = window.viewport_size().height - rem * 12.;
-        let height = available.min(rem * 38.75).max(rem * 20.);
+        // Fills its window, which the user can resize.
         v_flex()
             .id("library-browser")
             .debug_selector(|| "library-browser".into())
-            .track_focus(&self.focus)
             .w_full()
-            .h(height)
-            // The dialog body clips at its top edge, right above the search
-            // field: this keeps room for the focus rings drawn outside the
-            // field and the buttons.
+            .flex_1()
+            .min_h_0()
+            // The window clips its content at the padding: this keeps room
+            // for the focus rings drawn outside the search field and the
+            // buttons.
             .p(rems(FOCUS_RING_ROOM))
             .gap_3()
             .capture_action(cx.listener(Self::on_move_up))

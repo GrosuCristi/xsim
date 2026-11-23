@@ -1,6 +1,7 @@
 //! Viewer operations shared by the UI, the public API and the exporters.
 
 use crate::export;
+use crate::model::heights;
 use crate::model::op_table::is_operating_point;
 use crate::model::setup;
 use crate::scene::Scene;
@@ -86,6 +87,7 @@ impl WaveformViewer {
         Ok(stacked_scene(
             &model.x(),
             &panes,
+            &heights::weights(model.setup),
             width,
             height,
             &style,

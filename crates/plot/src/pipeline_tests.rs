@@ -61,6 +61,7 @@ impl Fixture {
         stacked_scene(
             &model.x(),
             &model.panes(),
+            &[],
             width,
             height,
             &style,
@@ -430,6 +431,7 @@ fn an_exported_narrow_spike_keeps_the_trace_width() {
     let scene = stacked_scene(
         &model.x(),
         &model.panes(),
+        &[],
         width as f32,
         height as f32,
         &style,

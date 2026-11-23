@@ -9,11 +9,11 @@ pub(crate) mod svg;
 use crate::canvas::primitives::{circle, polygon, polyline};
 use crate::model::geometry::Vec2;
 use gpui_kit::{component::ActiveTheme, *};
-use shapes::{Shape, extent};
+use shapes::{SIGN_ARM, Shape, extent};
 use xsim_project::PartKind;
 
 /// Pen width relative to one grid unit.
-const STROKE_RATIO: f32 = 0.085;
+const STROKE_RATIO: f32 = 0.17;
 
 /// How symbol-local points map to the screen.
 pub(crate) struct SymbolPlacement<'a> {
@@ -72,7 +72,7 @@ fn paint_shape(
 
 /// `+` or `−`, upright on screen.
 fn paint_sign(window: &mut Window, at: Vec2, plus: bool, scale: f32, width: f32, color: Hsla) {
-    let arm = 0.2 * scale;
+    let arm = SIGN_ARM * scale;
     let w = width * 0.85;
     polyline(
         window,
@@ -120,7 +120,7 @@ pub(crate) fn paint_fitted(
             window,
             shape,
             &placement,
-            stroke_width(scale).min(scale * 0.2).max(1.0),
+            stroke_width(scale).min(scale * 0.4).max(1.0),
             color,
         );
     }

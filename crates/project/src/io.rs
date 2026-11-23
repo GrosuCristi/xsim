@@ -6,8 +6,11 @@
 //! * Floats round-trip exactly (`serde_json` `float_roundtrip`).
 //! * Saves are atomic: write a temporary file in the same directory, flush,
 //!   then rename over the target.
-//! * Older schemas are migrated on load (Q34). Schema 1 is the format of the
-//!   first prototype (see `tests/fixtures/schema1_rc_lowpass.xsim_proj`).
+//! * Older schemas are migrated on load (Q34), one schema at a time: schema 1
+//!   is the format of the first prototype (see
+//!   `tests/fixtures/schema1_rc_lowpass.xsim_proj`) and becomes schema 2;
+//!   schema 2 stored coordinates in units twice as large as schema 3's
+//!   (D22) and becomes schema 3 by doubling them (see `schema2`).
 //! * Newer schemas are opened best-effort (Q45): unknown fields are ignored
 //!   and [`Compatibility::Newer`] tells the UI to warn and open read-only.
 //!
@@ -28,18 +31,20 @@
 mod header;
 mod newer;
 mod schema1;
+mod schema2;
 mod validate;
 
 use crate::document::Project;
 use crate::error::ProjectError;
 use serde::Deserialize;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::path::Path;
 
 pub(crate) use validate::validate;
 
 /// Current native schema version.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Project file extension (without dot).
 pub const PROJECT_EXTENSION: &str = "xsim_proj";
@@ -76,7 +81,7 @@ impl Project {
             // intermediate JSON tree.
             return checked(serde_json::from_str(text)?, Compatibility::Current);
         }
-        convert(&serde_json::from_str(text)?, version)
+        convert(Cow::Owned(serde_json::from_str(text)?), version)
     }
 
     /// Canonical JSON text (see module docs).
@@ -128,23 +133,31 @@ pub(crate) fn project_from_value(value: &Value) -> Result<LoadedProject, Project
     if version == SCHEMA_VERSION {
         return checked(Project::deserialize(value)?, Compatibility::Current);
     }
-    convert(value, version)
+    convert(Cow::Borrowed(value), version)
 }
 
 /// Migrates an older document, or reads a newer one best-effort.
-fn convert(value: &Value, version: u32) -> Result<LoadedProject, ProjectError> {
+///
+/// Each migration step lifts the document by one schema, so every older
+/// schema passes through the same last step: schema 1 becomes a schema-2
+/// document, which becomes schema 3.
+fn convert(value: Cow<'_, Value>, version: u32) -> Result<LoadedProject, ProjectError> {
     if version > SCHEMA_VERSION {
-        checked(
-            newer::parse(value, version)?,
+        return checked(
+            newer::parse(&value, version)?,
             Compatibility::Newer { version },
-        )
-    } else {
-        // Schema 1 is the only older schema.
-        checked(
-            schema1::migrate(value)?,
-            Compatibility::Migrated { from: version },
-        )
+        );
     }
+    let mut value = match version {
+        1 => serde_json::to_value(schema1::migrate(&value)?)?,
+        _ => value.into_owned(),
+    };
+    // Schema 2 is the only other older schema.
+    schema2::migrate(&mut value)?;
+    checked(
+        Project::deserialize(value)?,
+        Compatibility::Migrated { from: version },
+    )
 }
 
 fn checked(project: Project, compatibility: Compatibility) -> Result<LoadedProject, ProjectError> {
@@ -199,7 +212,7 @@ mod tests {
     #[test]
     fn malformed_json_is_a_format_error() {
         assert!(matches!(
-            Project::from_json("{\"schema_version\": 2,"),
+            Project::from_json("{\"schema_version\": 3,"),
             Err(ProjectError::Format(_))
         ));
         assert!(matches!(
@@ -210,7 +223,7 @@ mod tests {
 
     #[test]
     fn wrongly_typed_current_schema_is_a_format_error() {
-        let text = r#"{"schema_version": 2, "circuits": "none"}"#;
+        let text = r#"{"schema_version": 3, "circuits": "none"}"#;
         assert!(matches!(
             Project::from_json(text),
             Err(ProjectError::Format(_))
@@ -223,7 +236,7 @@ mod tests {
         assert!(text.ends_with("}\n"));
         assert!(!text.ends_with("\n\n"));
         assert!(!text.contains('\r'));
-        assert!(text.starts_with("{\n  \"schema_version\": 2,\n  \"name\": \"P\","));
+        assert!(text.starts_with("{\n  \"schema_version\": 3,\n  \"name\": \"P\","));
     }
 
     #[test]

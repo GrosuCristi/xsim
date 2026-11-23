@@ -31,7 +31,7 @@ fn every_toolbar_part_places_with_a_fresh_designator(cx: &mut TestAppContext) {
     for (i, kind) in TOOLBAR_PARTS.into_iter().enumerate() {
         h.click_control(toolbar_selector(kind));
         assert_eq!(h.read(|e| e.tool()), Tool::Place(kind));
-        let x = -16 + 4 * i as i32;
+        let x = -32 + 8 * i as i32;
         h.click(x, 0);
         let s = h.schematic();
         let placed = s.components.last().expect("a part was placed");
@@ -49,7 +49,7 @@ fn placement_repeats_until_escape(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("shift-r");
     h.click(0, 0);
-    h.click(0, 4);
+    h.click(0, 8);
     let names: Vec<String> = h
         .schematic()
         .components
@@ -59,7 +59,7 @@ fn placement_repeats_until_escape(cx: &mut TestAppContext) {
     assert_eq!(names, ["R1", "R2"]);
     h.keys("escape");
     assert_eq!(h.read(|e| e.tool()), Tool::Select);
-    h.click(0, 8);
+    h.click(0, 16);
     assert_eq!(h.schematic().components.len(), 2);
     h.close();
 }
@@ -68,17 +68,17 @@ fn placement_repeats_until_escape(cx: &mut TestAppContext) {
 fn the_ghost_rotates_and_mirrors_before_placing(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
     h.keys("c");
-    let p = h.at(2, 2);
+    let p = h.at(4, 4);
     h.hover(p);
     h.keys("r");
-    h.click(2, 2);
+    h.click(4, 4);
     h.keys("x");
-    h.click(8, 2);
+    h.click(16, 4);
     let s = h.schematic();
     assert_eq!(s.components[0].orientation.rotation, 1);
     assert_eq!(
         s.components[0].pins(),
-        vec![Point::new(2, 0), Point::new(2, 4)]
+        vec![Point::new(4, 0), Point::new(4, 8)]
     );
     assert!(s.components[1].orientation.mirror_x);
     h.close();
@@ -90,7 +90,7 @@ fn sources_start_upright_with_plus_on_top(cx: &mut TestAppContext) {
     h.keys("v");
     h.click(0, 0);
     let pins = h.schematic().components[0].pins();
-    assert_eq!(pins, vec![Point::new(0, -2), Point::new(0, 2)]);
+    assert_eq!(pins, vec![Point::new(0, -4), Point::new(0, 4)]);
     h.close();
 }
 
@@ -121,7 +121,7 @@ fn start_placing_uses_the_given_part(cx: &mut TestAppContext) {
     let part = Part::Resistor { resistance: 47e3 };
     h.update(|e, cx| e.start_placing(part.clone(), cx));
     assert_eq!(h.read(|e| e.placing().cloned()), Some(part.clone()));
-    h.click(4, 4);
+    h.click(8, 8);
     assert_eq!(h.schematic().components[0].part, part);
     h.keys(&primary("z"));
     assert!(h.schematic().components.is_empty());
@@ -131,7 +131,7 @@ fn start_placing_uses_the_given_part(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_click_right_after_a_shortcut_places_without_moving_the_mouse(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
-    let p = h.at(4, 4);
+    let p = h.at(8, 8);
     h.hover(p);
     h.keys("shift-r r");
     h.cx.simulate_click(p, gpui_kit::Modifiers::default());
@@ -148,7 +148,7 @@ fn a_click_right_after_a_shortcut_places_without_moving_the_mouse(cx: &mut TestA
 #[gpui_kit::test]
 fn jfets_place_from_the_tool_with_their_default_models(cx: &mut TestAppContext) {
     let mut h = open(cx, Schematic::default());
-    for (x, kind) in [(0, PartKind::NJfet), (6, PartKind::PJfet)] {
+    for (x, kind) in [(0, PartKind::NJfet), (12, PartKind::PJfet)] {
         h.update(|e, cx| e.set_tool(Tool::Place(kind), cx));
         h.click(x, 0);
     }

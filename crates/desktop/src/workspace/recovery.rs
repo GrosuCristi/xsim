@@ -129,7 +129,7 @@ impl Workspace {
     /// Offers the snapshots of crashed instances, if any.
     pub(super) fn offer_orphans(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.recovery.orphans.is_empty() {
-            open_recovery_dialog(cx.entity(), self.orphan_summaries(), window, cx);
+            open_recovery_dialog(cx.entity(), self.recovery.orphans.len(), window, cx);
         }
     }
 

@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn screen_mirrors_reflect_the_pins_for_all_sixteen_orientations() {
-        let origin = Point::new(3, -2);
+        let origin = Point::new(6, -4);
         for o in all_orientations() {
             let c = part(PartKind::NpnBjt, origin, o);
             for mirror in [Mirror::Horizontal, Mirror::Vertical] {
@@ -240,11 +240,11 @@ mod tests {
             wires: vec![
                 Wire {
                     id: 2,
-                    points: vec![Point::new(2, 0), Point::new(6, 0)],
+                    points: vec![Point::new(4, 0), Point::new(12, 0)],
                 },
                 Wire {
                     id: 3,
-                    points: vec![Point::new(-6, 0), Point::new(-2, 0)],
+                    points: vec![Point::new(-12, 0), Point::new(-4, 0)],
                 },
             ],
             next_id: 4,
@@ -260,7 +260,7 @@ mod tests {
         let c = &s.components[0];
         assert_eq!(c.position, Point::new(0, 0));
         assert_eq!(c.orientation.rotation, 1);
-        assert_eq!(c.pins(), vec![Point::new(0, -2), Point::new(0, 2)]);
+        assert_eq!(c.pins(), vec![Point::new(0, -4), Point::new(0, 4)]);
         assert_eq!(s.wires, schematic().wires, "wires stay where they were");
     }
 
@@ -270,8 +270,8 @@ mod tests {
         let selection = Selection::all(&s);
         rotate_selection(&mut s, &selection);
         assert_eq!(s.components[0].position, Point::new(0, 0));
-        assert_eq!(s.wires[0].points, vec![Point::new(0, 2), Point::new(0, 6)]);
-        assert_eq!(s.components[0].pins()[1], Point::new(0, 2));
+        assert_eq!(s.wires[0].points, vec![Point::new(0, 4), Point::new(0, 12)]);
+        assert_eq!(s.components[0].pins()[1], Point::new(0, 4));
     }
 
     #[test]
@@ -280,9 +280,9 @@ mod tests {
         s.wires.truncate(1);
         let selection = Selection::all(&s);
         mirror_selection(&mut s, &selection, Mirror::Horizontal);
-        assert_eq!(s.components[0].position, Point::new(4, 0));
-        assert_eq!(s.wires[0].points, vec![Point::new(2, 0), Point::new(-2, 0)]);
-        assert!(s.components[0].pins().contains(&Point::new(2, 0)));
+        assert_eq!(s.components[0].position, Point::new(8, 0));
+        assert_eq!(s.wires[0].points, vec![Point::new(4, 0), Point::new(-4, 0)]);
+        assert!(s.components[0].pins().contains(&Point::new(4, 0)));
     }
 
     #[test]

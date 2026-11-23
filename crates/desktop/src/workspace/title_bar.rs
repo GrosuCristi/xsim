@@ -105,6 +105,27 @@ impl Workspace {
     }
 }
 
+/// The xsim logo at the left of a dialog window's title row (D20, D22),
+/// for a row `row_height` high: smaller than the main window's, in the
+/// variant for the theme.
+pub fn dialog_logo(row_height: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+    let dark = cx.theme().is_dark();
+    let height = (window.rem_size() * 1.25).min(row_height - px(12.));
+    let logo = logo_for(dark, f32::from(height) * window.scale_factor());
+    testable(
+        "dialog-logo",
+        img(logo.image.clone())
+            .id("dialog-logo")
+            .role(Role::Image)
+            .aria_label("xsim")
+            .h(height)
+            .w(logo.width_at(height))
+            .flex_shrink_0(),
+    )
+    .flex_shrink_0()
+    .into_any_element()
+}
+
 /// The xsim logo in the corner, in the variant for the theme: white
 /// letters on a dark title bar, dark letters on a light one.
 fn app_logo(window: &Window, cx: &App) -> impl IntoElement {

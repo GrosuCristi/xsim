@@ -13,7 +13,8 @@
 //! The form logic (part ↔ field texts, validation, waveform tables) lives in
 //! GPUI-free modules: `spec`, `waveform`, `pwl`, `form` and `preview`. The
 //! view, its sections (`sections`, `transient`), the field widget and the
-//! dialog wiring build on them.
+//! dialog wiring build on them. The dialog is a window of its own (D22);
+//! choosing a model opens the library over it.
 
 mod dialog;
 mod field;
@@ -31,14 +32,16 @@ use crate::SchematicEditor;
 use gpui_kit::{App, Entity, Window};
 use xsim_project::Id;
 
-/// Opens the properties dialog for component `id` of `editor`'s schematic.
+/// Opens the properties dialog for component `id` of `editor`'s schematic,
+/// in its own modal window over `window` (D22, see
+/// [`crate::dialog_window`]).
 ///
 /// OK, Apply and Enter write the form as one undoable edit through
 /// [`SchematicEditor::apply_component_edit`] (nothing is written when no
 /// value changed); invalid fields block applying and show their error.
-/// Cancel and Escape discard the form. The dialog opens once the current
-/// update finishes, so this may be called while `editor` is being updated
-/// (e.g. from its double-click handler).
+/// Cancel, Escape and the window's close button discard the form. The
+/// dialog opens once the current update finishes, so this may be called
+/// while `editor` is being updated (e.g. from its double-click handler).
 pub fn open_properties(
     editor: &Entity<SchematicEditor>,
     id: Id,

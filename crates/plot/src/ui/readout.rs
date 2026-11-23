@@ -32,7 +32,9 @@ pub fn readout(viewer: &WaveformViewer, cx: &mut Context<WaveformViewer>) -> Opt
     let table = v_flex()
         .id("cursor-readout")
         .debug_selector(|| "cursor-readout".into())
-        .flex_shrink_0()
+        // In a short dock the readout gives up height and scrolls, so the
+        // "Add pane" strip under it stays inside the dock (D22).
+        .min_h_0()
         .max_h(rems(13.0))
         .overflow_y_scroll()
         .px_3()

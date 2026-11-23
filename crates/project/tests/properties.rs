@@ -23,7 +23,7 @@ fn finite_f32() -> impl Strategy<Value = f32> {
 /// Coordinates on a small grid, so that pins, vertices and labels collide
 /// often and every connection rule is exercised.
 fn point() -> impl Strategy<Value = Point> {
-    (-6..=6, -6..=6).prop_map(|(x, y)| Point::new(x, y))
+    (-12..=12, -12..=12).prop_map(|(x, y)| Point::new(x, y))
 }
 
 fn waveform() -> impl Strategy<Value = Waveform> {
@@ -237,22 +237,28 @@ fn plot() -> impl Strategy<Value = PlotSetup> {
             visible,
             slot,
         });
+    // Pane heights are relative weights: any positive finite `f32` (D23).
+    let height = {
+        use proptest::num::f32::{NORMAL, POSITIVE, SUBNORMAL};
+        proptest::option::of(POSITIVE | NORMAL | SUBNORMAL)
+    };
     let pane = (
         prop::collection::vec(trace, 0..3),
         range(),
         range(),
         proptest::option::of(any::<bool>()),
         y_scale,
-        range(),
+        (range(), height),
     )
         .prop_map(
-            |(traces, x_range, y_range, x_log, y_scale, y2_range)| PlotPane {
+            |(traces, x_range, y_range, x_log, y_scale, (y2_range, height))| PlotPane {
                 traces,
                 x_range,
                 y_range,
                 x_log,
                 y_scale,
                 y2_range,
+                height,
             },
         );
     prop::collection::vec(pane, 1..3).prop_flat_map(|panes| {
@@ -367,8 +373,8 @@ proptest! {
         let original = connectivity(&s);
         let moved = connectivity(&translated(&s, d));
         assert_translated(&original, &moved, d);
-        for x in -9..=9 {
-            for y in -9..=9 {
+        for x in -18..=18 {
+            for y in -18..=18 {
                 let p = Point::new(x, y);
                 prop_assert_eq!(original.net_at(p), moved.net_at(p + d));
             }

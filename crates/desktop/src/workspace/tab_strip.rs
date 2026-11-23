@@ -77,6 +77,28 @@ impl FolderGeometry {
     }
 }
 
+/// How far the active circuit's tab still has to be scrolled into view
+/// (see [`Workspace::reveal_active_tab_once_laid_out`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TabReveal {
+    /// Nothing to scroll.
+    Done,
+    /// It has to be scrolled into view.
+    Pending,
+    /// The + after the last tab was scrolled into view on the frame
+    /// before; the tab follows.
+    PlusShown,
+}
+
+/// Asks for one more frame from inside `render`. GPUI ignores a notify
+/// while the window draws, so the notify waits until this frame is done.
+fn render_again(cx: &mut Context<Workspace>) {
+    let this = cx.weak_entity();
+    cx.defer(move |cx| {
+        this.update(cx, |_, cx| cx.notify()).ok();
+    });
+}
+
 /// `content` (the title or the rename box) in a tab's prefix. The kit puts
 /// its empty label box between the prefix and the close button, which adds
 /// a gap and the box's padding; the negative margin takes both back, so the
@@ -113,23 +135,35 @@ impl Workspace {
                 // after the last tab, but only for a bar with a suffix.
                 .last_empty_space(self.add_button(geometry, rem, cx))
                 // D20: Run and the analysis settings at the bar's right end.
-                .suffix(self.render_run_controls(cx)),
+                .suffix(self.render_run_controls(window, cx)),
         )
     }
 
-    /// Scrolls the active circuit's tab into view after a project was shown.
-    /// GPUI drops a scroll request made before the strip's first layout, so
-    /// until then this asks for one more frame.
+    /// Scrolls the active circuit's tab into view after a project was shown
+    /// or Run changed width. GPUI drops a scroll request made before the
+    /// strip's first layout, so until then this asks for one more frame.
+    /// The last circuit's tab shows with the + after it, as a new circuit
+    /// does: GPUI applies one scroll request a frame, so the + is scrolled
+    /// into view first and the tab on the next frame, which wins where the
+    /// strip cannot hold both.
     pub(super) fn reveal_active_tab_once_laid_out(&mut self, cx: &mut Context<Self>) {
-        if !self.reveal_active_tab {
+        if self.reveal_active_tab == TabReveal::Done {
             return;
         }
         if self.tab_scroll.children_count() == 0 {
             cx.notify();
             return;
         }
-        self.reveal_active_tab = false;
-        self.tab_scroll.scroll_to_item(self.active_index());
+        let active = self.active_index();
+        if active + 1 == self.tabs.len() && self.reveal_active_tab == TabReveal::Pending {
+            self.reveal_active_tab = TabReveal::PlusShown;
+            // The strip's children are the tabs and then the +.
+            self.tab_scroll.scroll_to_item(self.tabs.len());
+            render_again(cx);
+            return;
+        }
+        self.reveal_active_tab = TabReveal::Done;
+        self.tab_scroll.scroll_to_item(active);
     }
 
     /// The + button, like a browser's new-tab button.

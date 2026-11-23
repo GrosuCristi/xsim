@@ -19,7 +19,7 @@ use gpui_kit::{
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
-use xsim_project::{PlotSetup, Trace, YScale};
+use xsim_project::{PlotPane, PlotSetup, Trace, YScale};
 use xsim_spice_engine::SimulationResult;
 
 struct Harness {
@@ -30,7 +30,7 @@ struct Harness {
 }
 
 fn options() -> WindowOptions {
-    let bounds = Bounds::new(Point::default(), size(px(1100.), px(760.)));
+    let bounds = Bounds::new(Point::default(), size(px(1100.), px(WINDOW_HEIGHT)));
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         ..WindowOptions::default()
@@ -46,36 +46,52 @@ fn open(cx: &mut TestAppContext) -> Harness {
     finish(cx, window, viewer)
 }
 
-/// A viewer squeezed into the bottom of the window, as when the shell
-/// gives the plot a short split: its toolbar sits near the window's edge.
-struct Squeezed {
+/// The test window's height.
+const WINDOW_HEIGHT: f32 = 760.0;
+
+/// A viewer docked in the bottom `height` pixels of the window, as when
+/// the shell's window is short or the plot gets a short split: its toolbar
+/// sits low and its bottom is the window's.
+struct Docked {
     viewer: Entity<WaveformViewer>,
+    height: f32,
 }
 
-impl Render for Squeezed {
+impl Render for Docked {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(div().h(px(680.)).flex_shrink_0())
-            .child(div().h(px(80.)).flex().child(self.viewer.clone()))
+            .child(div().h(px(WINDOW_HEIGHT - self.height)).flex_shrink_0())
+            .child(div().h(px(self.height)).flex().child(self.viewer.clone()))
     }
 }
 
-fn open_squeezed(cx: &mut TestAppContext) -> Harness {
-    let (window, viewer) = cx.update(|cx| {
+/// A viewer in the bottom `height` pixels of the window, and the dock, so
+/// a test can change its height.
+fn open_docked(cx: &mut TestAppContext, height: f32) -> (Harness, Entity<Docked>) {
+    let (window, viewer, dock) = cx.update(|cx| {
         gpui_kit::init(cx);
-        let mut viewer = None;
-        let (window, _) = gpui_kit::open_window(options(), cx, |_, cx| {
+        let mut built = None;
+        let (window, dock) = gpui_kit::open_window(options(), cx, |_, cx| {
             let inner = cx.new(WaveformViewer::new);
-            viewer = Some(inner.clone());
-            cx.new(|_| Squeezed { viewer: inner })
+            built = Some(inner.clone());
+            cx.new(|_| Docked {
+                viewer: inner,
+                height,
+            })
         })
         .expect("open a test window");
-        (window, viewer.expect("the viewer was built"))
+        (window, built.expect("the viewer was built"), dock)
     });
-    finish(cx, window, viewer)
+    (finish(cx, window, viewer), dock)
+}
+
+/// A viewer squeezed into the bottom 80 pixels of the window: its toolbar
+/// sits near the window's edge.
+fn open_squeezed(cx: &mut TestAppContext) -> Harness {
+    open_docked(cx, 80.0).0
 }
 
 fn finish(
@@ -760,7 +776,7 @@ fn delete_removes_the_selected_trace(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn toolbar_adds_and_removes_panes(cx: &mut TestAppContext) {
+fn the_plus_adds_and_the_close_button_removes_panes(cx: &mut TestAppContext) {
     let mut h = open(cx);
     h.show(transient(), PlotSetup::default());
     h.add("V(out)");
@@ -774,6 +790,409 @@ fn toolbar_adds_and_removes_panes(cx: &mut TestAppContext) {
     assert_eq!(top.right(), bottom.right());
     h.click("pane-close-1");
     assert_eq!(h.setup().panes.len(), 1);
+}
+
+/// Sets the UI scale: the rem size in pixels (16 = 100 %).
+fn set_rem(h: &mut Harness, rem: f32) {
+    h.cx.update(|_, app| {
+        gpui_kit::component::Theme::update(app, |theme| theme.font_size = px(rem));
+    });
+    h.viewer.update(&mut h.cx, |_, cx| cx.notify());
+    h.cx.run_until_parked();
+}
+
+/// Whether `inner` lies within `outer`, up to the paint snap.
+fn inside(outer: &Bounds<Pixels>, inner: &Bounds<Pixels>) -> bool {
+    let snap = px(SNAP);
+    inner.left() >= outer.left() - snap
+        && inner.right() <= outer.right() + snap
+        && inner.top() >= outer.top() - snap
+        && inner.bottom() <= outer.bottom() + snap
+}
+
+/// The window's bottom edge: the viewer fills the test window.
+fn window_bottom(h: &mut Harness) -> Pixels {
+    h.cx.update(|window, _| window.viewport_size().height)
+}
+
+/// D22 at 75 %, 100 % and 200 % UI scale, with the cursor readout hidden
+/// and shown: the "Add pane" plus is in a strip at the very bottom of the
+/// dock, below the last pane (so under its x labels, never over them) and
+/// below the readout, and not in the toolbar.
+#[gpui_kit::test]
+fn the_add_pane_plus_sits_at_the_very_bottom_of_the_dock(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    h.click("add-pane");
+    h.add("V(in)");
+    let last = 1;
+    for rem in [12.0, 16.0, 32.0] {
+        set_rem(&mut h, rem);
+        for cursors in [false, true] {
+            // At 200 % with the readout open two panes do not fit: show
+            // the last one, as adding it does.
+            h.viewer.update(&mut h.cx, |v, cx| {
+                v.set_cursors_visible(cursors, cx);
+                v.view.panes_scroll.scroll_to_bottom();
+            });
+            h.cx.run_until_parked();
+            let case = format!("{rem} px rem, cursors {cursors}");
+            let plus = h.bounds("add-pane");
+            let strip = h.bounds("waveform-footer");
+            assert!(
+                plus.size.width > px(0.) && plus.size.height > px(0.),
+                "{case}"
+            );
+            assert!(inside(&strip, &plus), "{case}: {plus:?} in {strip:?}");
+            assert!(near(strip.bottom(), window_bottom(&mut h)), "{case}");
+            // Below the last pane and every one of its x labels.
+            let (geometry, scene) = screen_scene(&mut h, last);
+            assert!(plus.top() >= geometry.frame.bottom(), "{case}");
+            let x_labels: Vec<_> = scene
+                .labels
+                .iter()
+                .filter(|l| l.anchor == crate::scene::Anchor::Middle)
+                .collect();
+            assert!(!x_labels.is_empty(), "{case}");
+            for label in x_labels {
+                let bottom = geometry.frame.top() + px(label.y + label.size * 0.6);
+                assert!(bottom <= plus.top(), "{case}: {label:?}");
+            }
+            assert!(
+                inside(&h.bounds("waveform-panes"), &geometry.frame),
+                "{case}"
+            );
+            if cursors {
+                assert!(plus.top() >= h.bounds("cursor-readout").bottom(), "{case}");
+            }
+            // The toolbar has no add-pane control any more: only the
+            // divider separates the trace field from the cursors button,
+            // where the old control was.
+            let toolbar = h.bounds("waveform-toolbar");
+            assert!(!toolbar.intersects(&plus), "{case}");
+            assert!(plus.top() >= toolbar.bottom(), "{case}");
+            let gap = h.bounds("toggle-cursors").left() - h.bounds("trace-input").right();
+            let rem_size = h.cx.update(|window, _| window.rem_size());
+            assert!(gap < rem_size * 1.5, "{case}: {gap:?}");
+            // The plus keeps the toolbar's left inset.
+            assert!(near(plus.left(), h.bounds("trace-input").left()), "{case}");
+        }
+    }
+}
+
+/// D22: with more panes than fit, the plus stays in view at every UI scale
+/// and keeps adding panes, each scrolled into view at the bottom of the
+/// stack, which scrolls instead of pushing the plus off the window.
+#[gpui_kit::test]
+fn the_plus_stays_in_view_with_more_panes_than_fit(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    for rem in [12.0, 16.0, 32.0] {
+        h.show(transient(), PlotSetup::default());
+        h.add("V(out)");
+        set_rem(&mut h, rem);
+        for added in 1..=8 {
+            let case = format!("{rem} px rem, pane {added}");
+            let plus = h.bounds("add-pane");
+            let strip = h.bounds("waveform-footer");
+            assert!(inside(&strip, &plus), "{case}");
+            assert!(near(strip.bottom(), window_bottom(&mut h)), "{case}");
+            // Clicked again and again without moving: the plus never moves
+            // under the pointer, so no click is lost.
+            h.click("add-pane");
+            assert_eq!(h.setup().panes.len(), added + 1, "{case}");
+            assert_eq!(h.bounds("add-pane").origin.x, plus.origin.x, "{case}");
+            // The new pane is in view, right above the strip.
+            let stack = h.bounds("waveform-panes");
+            let new = h.plot_geometry(added).frame;
+            assert!(inside(&stack, &new), "{case}: {new:?} in {stack:?}");
+            let strip = h.bounds("waveform-footer");
+            assert!(stack.bottom() <= strip.top() + px(SNAP), "{case}");
+        }
+        // Nine panes do not fit: the first one has scrolled out of view,
+        // and no pane got shorter than its minimum.
+        let stack = h.bounds("waveform-panes");
+        assert!(h.bounds("pane-0").top() < stack.top(), "{rem}: scrolled");
+        let min_height = h.cx.update(|window, _| window.rem_size()) * 7.5;
+        let pane = h.bounds("pane-0");
+        assert!(pane.size.height >= min_height - px(SNAP), "{rem}: {pane:?}");
+    }
+}
+
+/// The wheel over a plot zooms without scrolling the stack; over a pane's
+/// header it scrolls the stack and zooms nothing. The plus stays put.
+#[gpui_kit::test]
+fn the_wheel_scrolls_the_stack_only_over_a_pane_header(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    for _ in 0..8 {
+        h.click("add-pane");
+    }
+    let last = 8;
+    let plus = h.bounds("add-pane");
+    let before = h.plot_geometry(last).frame;
+    let center = h.plot(last).center();
+    h.scroll(center, 3.0, Modifiers::default());
+    assert!(h.setup().panes[0].x_range.is_some(), "the wheel zoomed");
+    assert_eq!(
+        h.plot_geometry(last).frame,
+        before,
+        "the stack did not move"
+    );
+
+    let zoomed = h.setup();
+    let header = h.bounds("pane-header-8");
+    let over_header = point(header.left() + px(4.), header.center().y);
+    h.scroll(over_header, 3.0, Modifiers::default());
+    let after = h.plot_geometry(last).frame;
+    assert!(after.top() > before.top(), "the stack scrolled: {after:?}");
+    assert_eq!(h.setup(), zoomed, "nothing zoomed");
+    assert_eq!(h.bounds("add-pane"), plus, "the plus stays put");
+}
+
+fn press_key(h: &mut Harness, key: &'static str) {
+    let keystroke = gpui_kit::Keystroke::parse(key).expect("a keystroke");
+    h.cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    h.cx.simulate_event(gpui_kit::KeyUpEvent { keystroke });
+    h.cx.run_until_parked();
+}
+
+/// D22: the plus is a tab stop, and Enter or Space on it adds a pane; it
+/// keeps the focus, so repeated presses go on adding panes.
+#[gpui_kit::test]
+fn enter_or_space_on_the_focused_plus_adds_a_pane(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    let focus = h.viewer.read_with(&h.cx, |v, _| v.add_pane_focus.clone());
+    h.cx.update(|window, app| focus.focus(window, app));
+    h.cx.run_until_parked();
+    for (key, panes) in [("enter", 2), ("space", 3), ("enter", 4)] {
+        press_key(&mut h, key);
+        assert_eq!(h.setup().panes.len(), panes, "{key}");
+        assert!(h.cx.update(|window, _| focus.is_focused(window)), "{key}");
+    }
+    // Tab order reaches it: away and back again.
+    h.cx.update(|window, app| window.focus_prev(app));
+    assert!(!h.cx.update(|window, _| focus.is_focused(window)));
+    h.cx.update(|window, app| window.focus_next(app));
+    assert!(h.cx.update(|window, _| focus.is_focused(window)));
+}
+
+/// No plus in the empty state or for an operating point, which have no
+/// panes to add to.
+#[gpui_kit::test]
+fn there_is_no_plus_without_panes(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    assert!(!h.rendered("add-pane"));
+    h.show(operating_point(), PlotSetup::default());
+    assert!(!h.rendered("add-pane"));
+    h.show(transient(), PlotSetup::default());
+    assert!(h.rendered("add-pane"));
+}
+
+/// The bounds of the element tagged `selector`, for selectors built at run
+/// time (`pane-3`).
+fn bounds_of(h: &mut Harness, selector: String) -> Bounds<Pixels> {
+    h.bounds(Box::leak(selector.into_boxed_str()))
+}
+
+/// D22 in a short window: with the cursor readout open and full of trace
+/// rows, the readout gives up height (and scrolls) before the plus does, so
+/// the plus stays at the dock's bottom edge and keeps adding panes, at 75 %
+/// to 200 % UI scale and down to a dock barely taller than the toolbar and
+/// the strip.
+#[gpui_kit::test]
+fn the_plus_stays_in_a_short_dock_with_the_readout_open(cx: &mut TestAppContext) {
+    let (mut h, dock) = open_docked(cx, 560.0);
+    h.show(transient(), PlotSetup::default());
+    for expression in [
+        "V(in)",
+        "V(out)",
+        "I(R1)",
+        "V(out)-V(in)",
+        "2*V(out)",
+        "V(in)/2",
+    ] {
+        h.add(expression);
+    }
+    h.viewer
+        .update(&mut h.cx, |v, cx| v.set_cursors_visible(true, cx));
+    h.cx.run_until_parked();
+    for rem in [12.0, 16.0, 24.0, 32.0] {
+        set_rem(&mut h, rem);
+        // The toolbar (2.5 rem) and the strip (2 rem) never shrink.
+        let rem_size = h.cx.update(|window, _| window.rem_size());
+        let fixed = rem_size.as_f32() * 4.5;
+        let mut row_heights = None;
+        for height in [560.0, 400.0, 300.0, fixed + 16.0] {
+            dock.update(&mut h.cx, |dock, cx| {
+                dock.height = height;
+                cx.notify();
+            });
+            h.cx.run_until_parked();
+            let case = format!("{rem} px rem, {height} px dock");
+            let strip = h.bounds("waveform-footer");
+            let plus = h.bounds("add-pane");
+            assert!(near(strip.bottom(), px(WINDOW_HEIGHT)), "{case}: {strip:?}");
+            assert!(inside(&strip, &plus), "{case}: {plus:?} in {strip:?}");
+            let toolbar = h.bounds("waveform-toolbar");
+            assert!(near(toolbar.top(), px(WINDOW_HEIGHT - height)), "{case}");
+            let readout = h.bounds("cursor-readout");
+            assert!(readout.top() >= toolbar.bottom() - px(SNAP), "{case}");
+            assert!(readout.bottom() <= strip.top() + px(SNAP), "{case}");
+            if height == 560.0 && rem <= 24.0 {
+                // With room, the readout is at its 13 rem cap: these rows
+                // fill it.
+                assert!(near(readout.size.height, rem_size * 13.0), "{case}");
+            }
+            // A shorter readout scrolls its rows; it never squashes them.
+            let rows = ["cursor-row-1", "cursor-delta-row"].map(|row| h.bounds(row).size.height);
+            let full = *row_heights.get_or_insert(rows);
+            for (row, full) in rows.into_iter().zip(full) {
+                assert!(near(row, full), "{case}: {row:?} of {full:?}");
+            }
+            let panes = h.setup().panes.len();
+            h.click("add-pane");
+            assert_eq!(h.setup().panes.len(), panes + 1, "{case}");
+        }
+    }
+}
+
+/// D22: nothing in the toolbar adds a pane any more. Its controls sit side
+/// by side with nothing between them (only the divider after the trace
+/// field, where the old control was), and clicks all along its empty
+/// middle add no pane.
+#[gpui_kit::test]
+fn the_toolbar_has_no_add_pane_control(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    let rem = h.cx.update(|window, _| window.rem_size());
+    let (inset, gap) = (rem * 0.5, rem * 0.25);
+    let toolbar = h.bounds("waveform-toolbar");
+    let field = h.bounds("trace-input");
+    assert!(near(field.left(), toolbar.left() + inset));
+    // The divider: a 1 px line with a 0.25 rem margin each side.
+    let cursors = h.bounds("toggle-cursors");
+    assert!(
+        near(cursors.left() - field.right(), gap * 4.0 + px(1.)),
+        "{:?}",
+        cursors.left() - field.right()
+    );
+    for pair in [
+        ["toggle-cursors", "toggle-measurements"],
+        ["toggle-measurements", "toggle-magnifier"],
+        ["toggle-magnifier", "zoom-to-fit"],
+        ["copy-plot", "export-menu"],
+    ] {
+        let (left, right) = (h.bounds(pair[0]), h.bounds(pair[1]));
+        assert!(near(right.left() - left.right(), gap), "{pair:?}");
+    }
+    assert!(near(
+        h.bounds("export-menu").right(),
+        toolbar.right() - inset
+    ));
+    // The empty middle. The copy and export buttons are left alone: one
+    // writes to the system clipboard, the other opens a menu.
+    let (from, to) = (
+        h.bounds("zoom-to-fit").right(),
+        h.bounds("copy-plot").left(),
+    );
+    let mut x = from + px(2.);
+    while x < to - px(2.) {
+        h.click_at(point(x, toolbar.center().y));
+        x += px(6.);
+    }
+    for selector in [
+        "toggle-cursors",
+        "toggle-measurements",
+        "toggle-magnifier",
+        "zoom-to-fit",
+    ] {
+        h.click(selector);
+    }
+    assert_eq!(h.setup().panes.len(), 1);
+}
+
+/// A chip dragged over the toolbar or the plus, where a pane scrolled out
+/// of view runs on hidden under them, targets no pane: only the visible
+/// part of a pane takes a dropped chip, and only it lights up (D14, D22).
+#[gpui_kit::test]
+fn a_chip_over_the_toolbar_or_the_plus_targets_no_hidden_pane(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    for _ in 0..8 {
+        h.click("add-pane");
+    }
+    h.add("V(in)");
+    let before = h.setup();
+    let target = |h: &mut Harness| h.viewer.read_with(&h.cx, |v, _| v.view.drop_target);
+    // Scrolled to the bottom: an earlier pane runs on under the toolbar.
+    let toolbar = h.bounds("waveform-toolbar");
+    let over_toolbar = point(
+        h.bounds("zoom-to-fit").right() + px(60.),
+        toolbar.center().y,
+    );
+    let under = (0..9).find(|&i| bounds_of(&mut h, format!("pane-{i}")).contains(&over_toolbar));
+    assert!(under.is_some(), "a pane lies under the toolbar");
+    h.drag_chip("trace-chip-8-0", over_toolbar, |h| {
+        assert_eq!(target(h), None, "no hidden pane is the target");
+    });
+    assert_eq!(h.setup(), before, "nothing moved");
+    assert_eq!(target(&mut h), None);
+
+    // Scrolled to the top: a later pane runs on under the plus.
+    h.viewer.update(&mut h.cx, |v, cx| {
+        v.view.panes_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    });
+    h.cx.run_until_parked();
+    let over_plus = h.bounds("add-pane").center();
+    let under = (0..9).find(|&i| bounds_of(&mut h, format!("pane-{i}")).contains(&over_plus));
+    assert!(under.is_some(), "a pane lies under the plus");
+    h.drag_chip("trace-chip-0-0", over_plus, |h| {
+        assert_eq!(target(h), None, "no hidden pane is the target");
+    });
+    assert_eq!(h.setup(), before, "nothing moved");
+    assert_eq!(target(&mut h), None);
+    // A visible pane still takes the chip.
+    let onto = h.at(1, 0.5, 0.5);
+    h.drag_chip("trace-chip-0-0", onto, |h| {
+        assert_eq!(target(h).map(|t| t.pane), Some(1));
+    });
+    assert_eq!(expressions(&h.setup(), 1), ["V(out)"]);
+}
+
+/// Closing panes while the stack is scrolled to its end: the panes left
+/// fill the stack again, with no blank gap under the last one.
+#[gpui_kit::test]
+fn closing_panes_while_scrolled_leaves_no_gap(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    for _ in 0..8 {
+        h.click("add-pane");
+    }
+    while h.setup().panes.len() > 1 {
+        let last = h.setup().panes.len() - 1;
+        let close = bounds_of(&mut h, format!("pane-close-{last}"));
+        h.click_at(close.center());
+        assert_eq!(h.setup().panes.len(), last, "pane {last} closed");
+        let stack = h.bounds("waveform-panes");
+        let bottom = bounds_of(&mut h, format!("pane-{}", last - 1));
+        assert!(
+            near(bottom.bottom(), stack.bottom()),
+            "{last} left: {bottom:?} ends the stack {stack:?}"
+        );
+        assert!(h.bounds("pane-0").top() <= stack.top() + px(SNAP), "{last}");
+    }
 }
 
 #[gpui_kit::test]
@@ -1706,10 +2125,14 @@ fn dragging_a_chip_moves_the_trace_to_another_pane(cx: &mut TestAppContext) {
         assert!(!h.rendered("pane-drop-1") && !h.rendered("pane-drop-refused-1"));
     });
     let toolbar = h.bounds("zoom-to-fit").center();
-    h.drag_chip("trace-chip-1-0", toolbar, |_| {});
+    h.drag_chip("trace-chip-1-0", toolbar, |h| {
+        // D23: the dividers make way while a chip is dragged.
+        assert!(!h.rendered("pane-divider-0"));
+    });
     assert_eq!(h.setup(), before);
     let target = h.viewer.read_with(&h.cx, |v, _| v.view.drop_target);
     assert_eq!(target, None);
+    assert!(h.rendered("pane-divider-0"), "and are back after it");
 
     // A click without a drag still selects.
     h.click("trace-chip-0-0");
@@ -1798,10 +2221,13 @@ fn escape_cancels_a_chip_drag(cx: &mut TestAppContext) {
         h.cx.simulate_keystrokes("escape");
         h.cx.run_until_parked();
         assert!(!h.rendered("pane-drop-1"), "the highlight goes away");
+        // D23: the divider, left out while the chip was dragged, is back.
+        assert!(h.rendered("pane-divider-0"), "the divider is back");
     });
     assert_eq!(h.setup(), before, "the trace stays where it was");
     let target = h.viewer.read_with(&h.cx, |v, _| v.view.drop_target);
     assert_eq!(target, None);
+    assert!(h.rendered("pane-divider-0"));
 }
 
 /// A cursor keeps following its trace when a pane above it is removed.
@@ -2518,4 +2944,795 @@ fn space_released_elsewhere_does_not_stick(cx: &mut TestAppContext) {
     h.drag(MouseButton::Left, from, point(from.x - px(80.), from.y));
     assert_ne!(h.cursors(), before, "the press drags the cursor line");
     assert!(!h.viewer.read_with(&h.cx, |v, _| v.view.space_held));
+}
+
+// D23: the dividers between panes.
+
+/// The bounds of pane `pane`.
+fn pane_bounds(h: &mut Harness, pane: usize) -> Bounds<Pixels> {
+    bounds_of(h, format!("pane-{pane}"))
+}
+
+/// Every pane's height, top to bottom.
+fn pane_heights(h: &mut Harness) -> Vec<f32> {
+    let count = h.setup().panes.len();
+    (0..count)
+        .map(|i| pane_bounds(h, i).size.height.as_f32())
+        .collect()
+}
+
+/// The band of the divider under pane `upper`.
+fn divider_bounds(h: &mut Harness, upper: usize) -> Bounds<Pixels> {
+    bounds_of(h, format!("pane-divider-{upper}"))
+}
+
+/// Every pane's stored height.
+fn stored_heights(h: &mut Harness) -> Vec<Option<f32>> {
+    h.setup().panes.iter().map(|p| p.height).collect()
+}
+
+/// Panes with `heights`, each plotting `V(out)`.
+fn panes_of(heights: &[Option<f32>]) -> PlotSetup {
+    PlotSetup {
+        panes: heights
+            .iter()
+            .map(|&height| PlotPane {
+                traces: vec![Trace::new("V(out)")],
+                height,
+                ..PlotPane::default()
+            })
+            .collect(),
+        active_pane: 0,
+    }
+}
+
+fn rem_px(h: &mut Harness) -> f32 {
+    h.cx.update(|window, _| window.rem_size()).as_f32()
+}
+
+/// Whether `a` and `b` differ by at most `tolerance` pixels.
+fn within(a: f32, b: f32, tolerance: f32) -> bool {
+    (a - b).abs() <= tolerance
+}
+
+/// Presses on the middle of the divider under pane `upper`, moves the
+/// pointer `dy` pixels down in `steps` steps (laid out again after each),
+/// runs `during` and releases there.
+fn drag_divider(
+    h: &mut Harness,
+    upper: usize,
+    dy: f32,
+    steps: u32,
+    during: impl FnOnce(&mut Harness),
+) {
+    let from = divider_bounds(h, upper).center();
+    let none = Modifiers::default();
+    h.cx.simulate_mouse_move(from, None, none);
+    h.cx.simulate_mouse_down(from, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    for step in 1..=steps {
+        let to = point(from.x, from.y + px(dy * step as f32 / steps as f32));
+        h.cx.simulate_mouse_move(to, MouseButton::Left, none);
+        h.cx.run_until_parked();
+    }
+    during(h);
+    let to = point(from.x, from.y + px(dy));
+    h.cx.simulate_mouse_up(to, MouseButton::Left, none);
+    h.cx.run_until_parked();
+}
+
+/// A press and release with `click_count` at `position`, as the second
+/// half of a double click arrives.
+fn click_with_count(h: &mut Harness, position: Point<Pixels>, click_count: usize) {
+    h.cx.simulate_event(MouseDownEvent {
+        position,
+        button: MouseButton::Left,
+        modifiers: Modifiers::default(),
+        click_count,
+        first_mouse: false,
+    });
+    h.cx.simulate_event(MouseUpEvent {
+        position,
+        button: MouseButton::Left,
+        modifiers: Modifiers::default(),
+        click_count,
+    });
+    h.cx.run_until_parked();
+}
+
+/// D23: dragging the divider between two panes moves height from one to
+/// the other, in small steps or one jump, also next to a right axis (D9).
+/// The other panes, the stack and the plus stay where they were, nothing
+/// pans, zooms or changes the active pane, and the setup changes once, on
+/// release.
+#[gpui_kit::test]
+fn dragging_a_divider_moves_height_between_its_panes(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    h.add("I(R1)");
+    h.click("add-pane");
+    h.add("V(in)");
+    h.click("add-pane");
+    h.add("V(out)");
+    assert!(h.plot_geometry(0).y2.is_some(), "pane 0 has a right axis");
+    let before = pane_heights(&mut h);
+    assert!(
+        before.iter().all(|&x| within(x, before[0], 1.0)),
+        "{before:?}"
+    );
+    let (stack, plus) = (h.bounds("waveform-panes"), h.bounds("add-pane"));
+    let plot = h.plot(0);
+    let setup = h.setup();
+    let changes = h.changes.get();
+    drag_divider(&mut h, 0, 60.0, 6, |h| {
+        // The panes follow the pointer; the setup changes on release.
+        let live = pane_heights(h);
+        assert!(within(live[0], before[0] + 60.0, 1.0), "{live:?}");
+        assert_eq!(h.changes.get(), changes, "nothing reported mid-drag");
+        assert_eq!(h.setup(), setup, "nothing stored mid-drag");
+        for pane in 0..3 {
+            assert_eq!(h.pointer(pane), CursorStyle::ResizeRow, "{pane}");
+        }
+    });
+    assert_eq!(h.changes.get(), changes + 1, "one SetupChanged per drag");
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0] + 60.0, 1.0), "{after:?}");
+    assert!(within(after[1], before[1] - 60.0, 1.0), "{after:?}");
+    assert!(within(after[2], before[2], 1.0), "{after:?}");
+    let grown = h.plot(0).size.height.as_f32();
+    assert!(
+        within(grown, plot.size.height.as_f32() + 60.0, 1.0),
+        "{grown}"
+    );
+    let stored = stored_heights(&mut h);
+    assert!(stored[0].is_some_and(|w| w > 1.0), "{stored:?}");
+    assert!(stored[1].is_some_and(|w| w < 1.0), "{stored:?}");
+    assert_eq!(stored[2], None, "the third pane is untouched");
+    let ranges = |s: &PlotSetup| -> Vec<_> {
+        s.panes
+            .iter()
+            .map(|p| (p.x_range, p.y_range, p.y2_range, p.traces.clone()))
+            .collect()
+    };
+    let now = h.setup();
+    assert_eq!(ranges(&now), ranges(&setup), "no pan, zoom or trace change");
+    assert_eq!(now.active_pane, setup.active_pane);
+    assert_eq!(h.bounds("waveform-panes"), stack);
+    assert_eq!(h.bounds("add-pane"), plus);
+    // The divider sits on the new boundary.
+    let line = pane_bounds(&mut h, 1).top().as_f32();
+    let middle = divider_bounds(&mut h, 0).center().y.as_f32();
+    assert!(within(middle, line, 1.0), "{middle} on {line}");
+
+    // The other divider, upwards in one jump.
+    drag_divider(&mut h, 1, -40.0, 1, |_| {});
+    assert_eq!(h.changes.get(), changes + 2);
+    let last = pane_heights(&mut h);
+    assert!(within(last[0], after[0], 1.0), "{last:?}");
+    assert!(within(last[1], after[1] - 40.0, 1.0), "{last:?}");
+    assert!(within(last[2], after[2] + 40.0, 1.0), "{last:?}");
+
+    // In 1 px steps the pointer stays on the band, which passes the moves
+    // on.
+    drag_divider(&mut h, 1, 12.0, 12, |_| {});
+    assert_eq!(h.changes.get(), changes + 3);
+    let fine = pane_heights(&mut h);
+    assert!(within(fine[1], last[1] + 12.0, 1.0), "{fine:?}");
+    assert!(within(fine[2], last[2] - 12.0, 1.0), "{fine:?}");
+    let last = fine;
+
+    // Closing a pane leaves the others in proportion; a new pane gets an
+    // average share.
+    let close = bounds_of(&mut h, "pane-close-2".into());
+    h.click_at(close.center());
+    let two = pane_heights(&mut h);
+    let ratio = |v: &[f32]| v[0] / v[1];
+    assert!(
+        (ratio(&two) - ratio(&last)).abs() < 0.02,
+        "{two:?} vs {last:?}"
+    );
+    h.click("add-pane");
+    let three = pane_heights(&mut h);
+    let total: f32 = three.iter().sum();
+    assert!(within(three[2], total / 3.0, 1.5), "{three:?}");
+    assert!((ratio(&three) - ratio(&last)).abs() < 0.02, "{three:?}");
+
+    // What the drags stored is a valid project setup: it saves, reads back
+    // the same and saves again byte for byte.
+    let mut project = xsim_project::Project::new("Resized");
+    project.circuits[0].plot = h.setup();
+    let text = project.to_json();
+    let loaded = xsim_project::Project::from_json(&text).expect("a valid project");
+    assert_eq!(loaded.project.circuits[0].plot, h.setup());
+    assert_eq!(loaded.project.to_json(), text);
+    assert!(text.contains("\"height\": "), "{text}");
+}
+
+/// D23 at 75 %, 100 % and 150 % UI scale: a divider stops where the pane
+/// it shrinks reaches the minimum height of 7.5 rem, in both directions,
+/// and the pair keeps its total height.
+#[gpui_kit::test]
+fn a_divider_stops_at_the_minimum_pane_height(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None, None]));
+    for rem in [12.0, 16.0, 24.0] {
+        set_rem(&mut h, rem);
+        let min = rem_px(&mut h) * super::pane::MIN_PANE_HEIGHT;
+        let total: f32 = pane_heights(&mut h).iter().sum();
+        // Down to the window's bottom edge, over the plus.
+        let from = divider_bounds(&mut h, 0).center().y.as_f32();
+        drag_divider(&mut h, 0, WINDOW_HEIGHT - 2.0 - from, 4, |_| {});
+        let low = pane_heights(&mut h);
+        assert!(within(low[1], min, 1.0), "{rem}: {low:?}, min {min}");
+        assert!(within(low[0] + low[1], total, 1.0), "{rem}: {low:?}");
+        // Up to the window's top edge, over the toolbar.
+        let from = divider_bounds(&mut h, 0).center().y.as_f32();
+        drag_divider(&mut h, 0, 2.0 - from, 4, |_| {});
+        let high = pane_heights(&mut h);
+        assert!(within(high[0], min, 1.0), "{rem}: {high:?}");
+        assert!(within(high[0] + high[1], total, 1.0), "{rem}: {high:?}");
+        // The small pane still has its plot and every x label.
+        let (geometry, scene) = screen_scene(&mut h, 0);
+        assert!(geometry.plot.size.height > px(2.0 * rem), "{rem}");
+        for label in &scene.labels {
+            let bottom = geometry.frame.top() + px(label.y + label.size * 0.6);
+            assert!(
+                bottom <= geometry.frame.bottom() + px(SNAP),
+                "{rem}: {label:?}"
+            );
+        }
+    }
+}
+
+/// D23: with more panes than fit, every pane is at its minimum and the
+/// stack scrolls; a divider then has no room to move and changes nothing.
+#[gpui_kit::test]
+fn a_scrolling_stack_has_no_room_to_resize(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None; 9]));
+    let before = pane_heights(&mut h);
+    let min = rem_px(&mut h) * super::pane::MIN_PANE_HEIGHT;
+    assert!(before.iter().all(|&x| within(x, min, 1.0)), "{before:?}");
+    let (setup, changes) = (h.setup(), h.changes.get());
+    drag_divider(&mut h, 0, 50.0, 2, |_| {});
+    assert_eq!(pane_heights(&mut h), before);
+    assert_eq!((h.setup(), h.changes.get()), (setup, changes));
+}
+
+/// D23: a double click on a divider makes its two panes equally high,
+/// keeping their total, and leaves the other panes alone; the first click
+/// of the pair changes nothing. Already equal, a double click reports
+/// nothing.
+#[gpui_kit::test]
+fn double_clicking_a_divider_makes_its_panes_equal(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[Some(2.0), None, None]));
+    let before = pane_heights(&mut h);
+    assert!(within(before[0], 2.0 * before[1], 2.0), "{before:?}");
+    assert!(within(before[2], before[1], 1.0), "{before:?}");
+    let changes = h.changes.get();
+    let double_click = |h: &mut Harness, upper: usize| {
+        let position = divider_bounds(h, upper).center();
+        h.cx.simulate_mouse_move(position, None, Modifiers::default());
+        click_with_count(h, position, 1);
+        let single = h.changes.get();
+        click_with_count(h, position, 2);
+        single
+    };
+    let single = double_click(&mut h, 0);
+    assert_eq!(single, changes, "the first click changes nothing");
+    assert_eq!(h.changes.get(), changes + 1);
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], after[1], 1.0), "{after:?}");
+    assert!(within(after[0] + after[1], before[0] + before[1], 1.0));
+    assert!(within(after[2], before[2], 1.0), "{after:?}");
+    assert_eq!(stored_heights(&mut h), [Some(1.5), Some(1.5), None]);
+    double_click(&mut h, 0);
+    assert_eq!(h.changes.get(), changes + 1, "already equal");
+    double_click(&mut h, 1);
+    assert_eq!(h.changes.get(), changes + 2);
+    assert_eq!(stored_heights(&mut h), [Some(1.5), Some(1.25), Some(1.25)]);
+}
+
+/// D23: Escape during a divider drag puts the heights back and reports
+/// nothing; a press without movement changes nothing either, not even the
+/// active pane. A release the viewer missed (outside the window) keeps the
+/// heights the drag reached, as a release does.
+#[gpui_kit::test]
+fn escape_or_a_click_on_a_divider_changes_nothing(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None, None]));
+    let before = pane_heights(&mut h);
+    let (setup, changes) = (h.setup(), h.changes.get());
+    drag_divider(&mut h, 0, 80.0, 4, |h| {
+        assert!(within(pane_heights(h)[0], before[0] + 80.0, 1.0));
+        h.cx.simulate_keystrokes("escape");
+        h.cx.run_until_parked();
+        assert_eq!(pane_heights(h), before, "put back at once");
+        let still = point(px(300.), px(500.));
+        h.cx.simulate_mouse_move(still, MouseButton::Left, Modifiers::default());
+        h.cx.run_until_parked();
+        assert_eq!(pane_heights(h), before, "the drag is over");
+    });
+    assert_eq!(pane_heights(&mut h), before);
+    assert_eq!((h.setup(), h.changes.get()), (setup.clone(), changes));
+
+    let band = divider_bounds(&mut h, 0);
+    h.click_at(band.center());
+    assert_eq!((h.setup(), h.changes.get()), (setup, changes));
+    assert_eq!(h.setup().active_pane, 0, "the lower pane did not activate");
+
+    // Moved, and then the release is missed: the next move without a
+    // button ends the drag where it was.
+    let from = band.center();
+    let none = Modifiers::default();
+    h.cx.simulate_mouse_move(from, None, none);
+    h.cx.simulate_mouse_down(from, MouseButton::Left, none);
+    let to = point(from.x, from.y - px(50.));
+    h.cx.simulate_mouse_move(to, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    h.cx.simulate_mouse_move(to, None, none);
+    h.cx.run_until_parked();
+    assert_eq!(h.changes.get(), changes + 1);
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0] - 50.0, 1.0), "{after:?}");
+    assert!(stored_heights(&mut h).iter().all(Option::is_some));
+}
+
+/// D23 with the cursors, their readout and the magnifier on: a divider
+/// drag neither pans nor zooms nor moves a cursor, shows no hover line or
+/// zoom box, and leaves the readout and the plus in place.
+#[gpui_kit::test]
+fn a_divider_drag_never_pans_zooms_or_moves_a_cursor(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), PlotSetup::default());
+    h.add("V(out)");
+    h.add("I(R1)");
+    h.click("add-pane");
+    h.add("V(in)");
+    h.click("toggle-cursors");
+    // Zoomed in on every axis, so a pan would move them.
+    let center = h.at(0, 0.5, 0.5);
+    h.scroll(center, 3.0, Modifiers::default());
+    h.scroll(center, 3.0, Modifiers::shift());
+    let zoomed = h.setup();
+    assert!(zoomed.panes[0].x_range.is_some() && zoomed.panes[0].y_range.is_some());
+    let cursors = h.cursors();
+    let readout = h.bounds("cursor-readout");
+    for (magnifier, dy) in [(false, 40.0), (true, -70.0)] {
+        if magnifier {
+            h.click("toggle-magnifier");
+        }
+        drag_divider(&mut h, 0, dy, 5, |h| {
+            for pane in 0..2 {
+                let overlay = h.overlay(pane);
+                assert_eq!(overlay.zoom_box, None, "{magnifier}");
+                assert_eq!(overlay.crosshair, None, "{magnifier}");
+            }
+            let drag = h.viewer.read_with(&h.cx, |v, _| v.view.drag);
+            assert!(
+                matches!(drag, Some(Drag::Divider { upper: 0, .. })),
+                "{drag:?}"
+            );
+        });
+        let setup = h.setup();
+        for (pane, (now, then)) in setup.panes.iter().zip(&zoomed.panes).enumerate() {
+            assert_eq!(
+                (now.x_range, now.y_range, now.y2_range),
+                (then.x_range, then.y_range, then.y2_range),
+                "{magnifier}: pane {pane}"
+            );
+        }
+        assert_eq!(h.cursors(), cursors, "{magnifier}");
+        assert_eq!(h.bounds("cursor-readout"), readout, "{magnifier}");
+        assert!(near(
+            h.bounds("waveform-footer").bottom(),
+            window_bottom(&mut h)
+        ));
+        let on = h.viewer.read_with(&h.cx, |v, _| v.view.magnifier);
+        assert_eq!(on, magnifier);
+    }
+}
+
+/// The divider bands hide the pointer from the viewer behind them, so they
+/// pass on the moves of other drags: a pan and a cursor drag that cross a
+/// divider keep following the pointer.
+#[gpui_kit::test]
+fn a_pan_or_cursor_drag_across_a_divider_keeps_going(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None, None]));
+    let center = h.at(0, 0.5, 0.5);
+    h.scroll(center, 4.0, Modifiers::default());
+    let zoomed = h.setup().panes[0].x_range;
+    let none = Modifiers::default();
+    let band = divider_bounds(&mut h, 0);
+    let from = h.at(0, 0.5, 0.5);
+    h.cx.simulate_mouse_move(from, None, none);
+    h.cx.simulate_mouse_down(from, MouseButton::Left, none);
+    let started = point(from.x - px(10.), from.y);
+    h.cx.simulate_mouse_move(started, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    let began = h.setup().panes[0].x_range;
+    assert_ne!(began, zoomed, "the pan began");
+    let over = point(from.x - px(60.), band.center().y);
+    h.cx.simulate_mouse_move(over, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    let on_band = h.setup().panes[0].x_range;
+    assert_ne!(on_band, began, "the pan follows over the divider");
+    let beyond = point(from.x - px(100.), h.at(1, 0.5, 0.5).y);
+    h.cx.simulate_mouse_move(beyond, MouseButton::Left, none);
+    h.cx.simulate_mouse_up(beyond, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    assert_ne!(h.setup().panes[0].x_range, on_band);
+    assert!(
+        stored_heights(&mut h).iter().all(Option::is_none),
+        "no resize"
+    );
+
+    // A cursor line dragged down across the divider.
+    h.click("toggle-cursors");
+    let x = h.line_x(CursorId::First);
+    let grab = point(x, h.at(0, 0.5, 0.8).y);
+    let before = h.cursors().first;
+    h.cx.simulate_mouse_move(grab, None, none);
+    h.cx.simulate_mouse_down(grab, MouseButton::Left, none);
+    let band = divider_bounds(&mut h, 0);
+    let over = point(x + px(80.), band.center().y);
+    h.cx.simulate_mouse_move(over, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    assert_ne!(h.cursors().first, before, "the cursor follows over it");
+    h.cx.simulate_mouse_up(over, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    assert!(
+        stored_heights(&mut h).iter().all(Option::is_none),
+        "no resize"
+    );
+}
+
+/// D23 at 75 %, 100 % and 200 % UI scale: a divider is a band 0.5 rem high
+/// across the pane, centred on the line between its panes, one between
+/// each pair. A grip shows on the line under the pointer and grows while
+/// the divider is dragged.
+#[gpui_kit::test]
+fn the_divider_band_straddles_the_line_with_a_grip(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None, None, None]));
+    assert!(h.rendered("pane-divider-0") && h.rendered("pane-divider-1"));
+    assert!(!h.rendered("pane-divider-2"), "none under the last pane");
+    for rem in [12.0, 16.0, 32.0] {
+        set_rem(&mut h, rem);
+        let rem_size = rem_px(&mut h);
+        for upper in 0..2 {
+            let band = divider_bounds(&mut h, upper);
+            let below = pane_bounds(&mut h, upper + 1);
+            let case = format!("{rem} px rem, divider {upper}");
+            let hit = rem_size * super::divider::HIT_HEIGHT;
+            assert!(
+                within(band.size.height.as_f32(), hit, 1.0),
+                "{case}: {band:?}"
+            );
+            let middle = band.center().y.as_f32();
+            assert!(within(middle, below.top().as_f32(), 1.0), "{case}");
+            assert!(near(band.left(), below.left()), "{case}");
+            assert!(near(band.right(), below.right()), "{case}");
+        }
+        // Away from it, no grip; over it, a short one.
+        let away = h.at(0, 0.5, 0.5);
+        h.cx.simulate_mouse_move(away, None, Modifiers::default());
+        h.cx.run_until_parked();
+        assert!(!h.rendered("pane-divider-grip-0"), "{rem}");
+        let band = divider_bounds(&mut h, 0);
+        h.cx.simulate_mouse_move(band.center(), None, Modifiers::default());
+        h.cx.run_until_parked();
+        assert!(h.rendered("pane-divider-grip-0"), "{rem}");
+        assert!(!h.rendered("pane-divider-grip-1"), "{rem}");
+        let grip = h.bounds("pane-divider-grip-0");
+        assert!(
+            within(grip.size.width.as_f32(), rem_size * 1.25, 1.0),
+            "{rem}"
+        );
+        assert!(within(
+            grip.center().y.as_f32(),
+            band.center().y.as_f32(),
+            1.0
+        ));
+        assert!(within(
+            grip.center().x.as_f32(),
+            band.center().x.as_f32(),
+            1.0
+        ));
+        drag_divider(&mut h, 0, 10.0, 1, |h| {
+            let grip = h.bounds("pane-divider-grip-0");
+            let width = grip.size.width.as_f32();
+            assert!(within(width, rem_size * 2.75, 1.0), "{rem}: {width}");
+        });
+        h.cx.simulate_mouse_move(away, None, Modifiers::default());
+        h.cx.run_until_parked();
+        assert!(!h.rendered("pane-divider-grip-0"), "{rem}");
+    }
+}
+
+/// D23: stored heights are relative, so the panes keep their proportion as
+/// the dock gets taller or shorter, and weights summing below one still
+/// fill the stack. Showing a setup never rewrites its heights.
+#[gpui_kit::test]
+fn pane_heights_keep_their_proportion_as_the_dock_resizes(cx: &mut TestAppContext) {
+    let (mut h, dock) = open_docked(cx, 560.0);
+    h.show(transient(), panes_of(&[Some(2.0), None]));
+    for height in [560.0, 700.0, 480.0] {
+        dock.update(&mut h.cx, |dock, cx| {
+            dock.height = height;
+            cx.notify();
+        });
+        h.cx.run_until_parked();
+        let heights = pane_heights(&mut h);
+        let case = format!("{height} px dock: {heights:?}");
+        assert!(within(heights[0], 2.0 * heights[1], 2.0), "{case}");
+        let stack = h.bounds("waveform-panes").size.height.as_f32();
+        assert!(within(heights.iter().sum(), stack, 1.0), "{case}");
+    }
+    assert_eq!(stored_heights(&mut h), [Some(2.0), None]);
+    h.show(transient(), panes_of(&[Some(0.2), Some(0.3)]));
+    let heights = pane_heights(&mut h);
+    let stack = h.bounds("waveform-panes").size.height.as_f32();
+    assert!(within(heights.iter().sum(), stack, 1.0), "{heights:?}");
+    assert!(within(heights[0] * 1.5, heights[1], 2.0), "{heights:?}");
+    assert_eq!(stored_heights(&mut h), [Some(0.2), Some(0.3)]);
+}
+
+/// D23: after the dock got shorter, a pane is held at its minimum height
+/// (taller than its weight's share). Dragging its divider still moves the
+/// divider with the pointer and leaves the third pane where it was.
+#[gpui_kit::test]
+fn a_pane_held_at_its_minimum_resizes_smoothly(cx: &mut TestAppContext) {
+    let (mut h, _dock) = open_docked(cx, 700.0);
+    h.show(transient(), panes_of(&[Some(0.3), None, None]));
+    let min = rem_px(&mut h) * super::pane::MIN_PANE_HEIGHT;
+    let before = pane_heights(&mut h);
+    assert!(within(before[0], min, 1.0), "held: {before:?}");
+    assert!(within(before[1], before[2], 1.0), "{before:?}");
+    drag_divider(&mut h, 0, 20.0, 2, |_| {});
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0] + 20.0, 1.0), "{after:?}");
+    assert!(within(after[1], before[1] - 20.0, 1.0), "{after:?}");
+    assert!(within(after[2], before[2], 1.0), "{after:?}");
+
+    // A double click there too: the two become equal, the third stays.
+    h.show(transient(), panes_of(&[Some(0.3), None, None]));
+    assert_eq!(pane_heights(&mut h), before);
+    let changes = h.changes.get();
+    let position = divider_bounds(&mut h, 0).center();
+    h.cx.simulate_mouse_move(position, None, Modifiers::default());
+    click_with_count(&mut h, position, 1);
+    click_with_count(&mut h, position, 2);
+    assert_eq!(h.changes.get(), changes + 1);
+    let equal = pane_heights(&mut h);
+    assert!(within(equal[0], equal[1], 1.0), "{equal:?}");
+    assert!(within(equal[0] + equal[1], before[0] + before[1], 1.0));
+    assert!(within(equal[2], before[2], 1.0), "{equal:?}");
+
+    // Review: the other divider's panes are painted by their weights, so
+    // dragging it changes only their heights; the held pane keeps its own,
+    // and with it its share of a taller dock.
+    h.show(transient(), panes_of(&[Some(0.3), None, None]));
+    drag_divider(&mut h, 1, 20.0, 2, |_| {});
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0], 1.0), "{after:?}");
+    assert!(within(after[1], before[1] + 20.0, 1.0), "{after:?}");
+    assert!(within(after[2], before[2] - 20.0, 1.0), "{after:?}");
+    assert_eq!(stored_heights(&mut h)[0], Some(0.3));
+}
+
+/// The `(y, height)` of each pane's plot in an exported SVG.
+fn exported_plots(svg: &str) -> Vec<(f32, f32)> {
+    let attribute = |text: &str, name: &str| -> f32 {
+        let key = format!(" {name}=\"");
+        let start = text.find(&key).expect("the attribute") + key.len();
+        let end = start + text[start..].find('"').expect("a closing quote");
+        text[start..end].parse().expect("a number")
+    };
+    svg.split("<clipPath id=\"plot-")
+        .skip(1)
+        .map(|rest| {
+            let rect = &rest[..rest.find("/>").expect("the clip rect")];
+            (attribute(rect, "y"), attribute(rect, "height"))
+        })
+        .collect()
+}
+
+/// The ratio of the first exported pane's height to the second's: the
+/// space between two plots holds one pane's gutters.
+fn exported_ratio(svg: &str) -> f32 {
+    let plots = exported_plots(svg);
+    assert_eq!(plots.len(), 2);
+    let gutters = plots[1].0 - (plots[0].0 + plots[0].1);
+    (plots[0].1 + gutters) / (plots[1].1 + gutters)
+}
+
+/// D23: exports (SVG, and the PNG, JPEG and clipboard images drawn from it)
+/// keep the panes' relative heights, also after a drag on screen.
+#[gpui_kit::test]
+fn exports_keep_the_relative_pane_heights(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[Some(3.0), None]));
+    for (width, height) in [(800, 900), (1600, 1200)] {
+        let svg = h
+            .viewer
+            .read_with(&h.cx, |v, _| v.svg(width, height))
+            .unwrap();
+        let ratio = exported_ratio(&svg);
+        assert!((ratio - 3.0).abs() < 0.01, "{width}×{height}: {ratio}");
+    }
+    drag_divider(&mut h, 0, -100.0, 2, |_| {});
+    let weights = stored_heights(&mut h);
+    let (Some(top), Some(bottom)) = (weights[0], weights[1]) else {
+        panic!("both heights are stored: {weights:?}");
+    };
+    let svg = h.viewer.read_with(&h.cx, |v, _| v.svg(800, 900)).unwrap();
+    let ratio = exported_ratio(&svg);
+    assert!(
+        (ratio - top / bottom).abs() < 0.01,
+        "{ratio} vs {top} / {bottom}"
+    );
+}
+
+/// Review of D23 with D14: a divider band lies over the edges of both its
+/// panes. A legend chip dropped there lands on the pane highlighted under
+/// the pointer, above the line or below it, as anywhere else on the pane,
+/// and the dividers are back once the chip is dropped.
+#[gpui_kit::test]
+fn a_chip_dropped_on_a_divider_lands_on_the_highlighted_pane(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    let setup = PlotSetup {
+        panes: vec![
+            PlotPane {
+                traces: vec![Trace::new("V(out)"), Trace::new("V(in)")],
+                ..PlotPane::default()
+            },
+            PlotPane {
+                traces: vec![Trace::new("I(R1)")],
+                ..PlotPane::default()
+            },
+        ],
+        active_pane: 0,
+    };
+    h.show(transient(), setup);
+    let band = divider_bounds(&mut h, 0);
+    let quarter = band.size.height / 4.0;
+    // Below the line: the top of the lower pane's header.
+    let below = point(band.center().x, band.center().y + quarter);
+    assert!(pane_bounds(&mut h, 1).contains(&below));
+    h.drag_chip("trace-chip-0-1", below, |h| {
+        assert!(h.rendered("pane-drop-1"), "the lower pane is the target");
+    });
+    let moved = h.setup();
+    assert_eq!(expressions(&moved, 0), ["V(out)"]);
+    assert_eq!(expressions(&moved, 1), ["I(R1)", "V(in)"]);
+    assert!(
+        !h.rendered("pane-drop-1"),
+        "the highlight ends with the drop"
+    );
+    assert!(h.rendered("pane-divider-0"), "the divider is back");
+
+    // Above the line: the bottom of the upper pane's x labels.
+    let band = divider_bounds(&mut h, 0);
+    let above = point(band.center().x, band.center().y - quarter);
+    assert!(pane_bounds(&mut h, 0).contains(&above));
+    h.drag_chip("trace-chip-1-0", above, |h| {
+        assert!(h.rendered("pane-drop-0"), "the upper pane is the target");
+    });
+    let moved = h.setup();
+    assert_eq!(expressions(&moved, 0), ["V(out)", "I(R1)"]);
+    assert_eq!(expressions(&moved, 1), ["V(in)"]);
+    assert!(
+        stored_heights(&mut h).iter().all(Option::is_none),
+        "no resize"
+    );
+
+    // The divider still drags afterwards.
+    let before = pane_heights(&mut h);
+    drag_divider(&mut h, 0, 30.0, 3, |_| {});
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0] + 30.0, 1.0), "{after:?}");
+
+    // The band was under the pointer when a chip drag began (the move that
+    // starts it can land there), so its grip shows; left out during the
+    // drag, the band never hears the pointer leave, and the grip must not
+    // outlive the drag.
+    let chip = h.bounds("trace-chip-0-1");
+    h.cx.simulate_mouse_move(chip.center(), None, Modifiers::default());
+    h.cx.run_until_parked();
+    h.viewer.update(&mut h.cx, |v, cx| {
+        v.view.divider_hover = Some(0);
+        cx.notify();
+    });
+    h.cx.run_until_parked();
+    assert!(h.rendered("pane-divider-grip-0"));
+    let target = h.at(1, 0.5, 0.5);
+    h.drag_chip("trace-chip-0-1", target, |_| {});
+    assert_eq!(expressions(&h.setup(), 1), ["V(in)", "I(R1)"]);
+    assert!(!h.rendered("pane-divider-grip-0"), "no stale grip");
+}
+
+/// Review of D23: with more panes than fit every pane is at its minimum,
+/// so a double click on a divider moves nothing on screen. It makes only
+/// its own two panes' stored heights equal, so they are equal once the
+/// dock is tall enough, and keeps every other pane's height.
+#[gpui_kit::test]
+fn a_double_click_in_a_scrolling_stack_keeps_the_other_heights(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    let mut heights = vec![None; 9];
+    heights[0] = Some(2.0);
+    heights[3] = Some(0.5);
+    h.show(transient(), panes_of(&heights));
+    let before = pane_heights(&mut h);
+    let min = rem_px(&mut h) * super::pane::MIN_PANE_HEIGHT;
+    assert!(before.iter().all(|&x| within(x, min, 1.0)), "{before:?}");
+    let changes = h.changes.get();
+    let double_click = |h: &mut Harness, upper: usize| {
+        let position = divider_bounds(h, upper).center();
+        h.cx.simulate_mouse_move(position, None, Modifiers::default());
+        click_with_count(h, position, 1);
+        click_with_count(h, position, 2);
+    };
+    // Panes 1 and 2 already weigh the same: nothing to do.
+    double_click(&mut h, 1);
+    assert_eq!(stored_heights(&mut h), heights);
+    assert_eq!(h.changes.get(), changes, "nothing changed");
+    // Panes 0 and 1 share their weights; the others keep theirs.
+    double_click(&mut h, 0);
+    let mut expected = heights.clone();
+    expected[0] = Some(1.5);
+    expected[1] = Some(1.5);
+    assert_eq!(stored_heights(&mut h), expected);
+    assert_eq!(h.changes.get(), changes + 1);
+    assert_eq!(pane_heights(&mut h), before, "nothing moves on screen");
+}
+
+/// Review of D23: the middle button on a divider band neither pans nor
+/// starts a resize, and pressing or releasing it during a divider drag
+/// leaves that drag alone, as for the plot's other drags (D14).
+#[gpui_kit::test]
+fn the_middle_button_on_a_divider_does_nothing(cx: &mut TestAppContext) {
+    let mut h = open(cx);
+    h.show(transient(), panes_of(&[None, None]));
+    let center = h.at(0, 0.5, 0.5);
+    h.scroll(center, 3.0, Modifiers::default());
+    let zoomed = h.setup();
+    let changes = h.changes.get();
+    let none = Modifiers::default();
+    let from = divider_bounds(&mut h, 0).center();
+    let to = point(from.x + px(80.), from.y + px(40.));
+    h.drag(MouseButton::Middle, from, to);
+    assert_eq!(h.setup(), zoomed, "no pan and no resize");
+    assert_eq!(h.changes.get(), changes);
+    assert_eq!(h.viewer.read_with(&h.cx, |v, _| v.view.drag), None);
+
+    // A left drag of the divider, with the middle button pressed and
+    // released on the way.
+    let before = pane_heights(&mut h);
+    h.cx.simulate_mouse_move(from, None, none);
+    h.cx.simulate_mouse_down(from, MouseButton::Left, none);
+    let mid = point(from.x, from.y + px(20.));
+    h.cx.simulate_mouse_move(mid, MouseButton::Left, none);
+    h.cx.simulate_mouse_down(mid, MouseButton::Middle, none);
+    h.cx.simulate_mouse_up(mid, MouseButton::Middle, none);
+    let end = point(from.x, from.y + px(45.));
+    h.cx.simulate_mouse_move(end, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    let drag = h.viewer.read_with(&h.cx, |v, _| v.view.drag);
+    assert!(
+        matches!(drag, Some(Drag::Divider { upper: 0, .. })),
+        "{drag:?}"
+    );
+    h.cx.simulate_mouse_up(end, MouseButton::Left, none);
+    h.cx.run_until_parked();
+    let after = pane_heights(&mut h);
+    assert!(within(after[0], before[0] + 45.0, 1.0), "{after:?}");
+    assert_eq!(h.changes.get(), changes + 1, "one change, on the release");
+    let now = h.setup();
+    for (now, then) in now.panes.iter().zip(&zoomed.panes) {
+        assert_eq!((now.x_range, now.y_range), (then.x_range, then.y_range));
+    }
 }

@@ -115,10 +115,13 @@ pub struct SchematicView {
 }
 
 impl Default for SchematicView {
+    /// The origin at 10 pixels per grid unit: a dot every 10 pixels, and a
+    /// two-pin part 80 pixels long (D22; 20 pixels per twice as large unit
+    /// in schema 2).
     fn default() -> Self {
         Self {
             center: [0.0, 0.0],
-            zoom: 20.0,
+            zoom: 10.0,
             user_set: false,
         }
     }
@@ -250,6 +253,14 @@ pub struct PlotPane {
     /// round-trip byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y2_range: Option<[f64; 2]>,
+    /// Relative height of the pane in the plot dock (D23): a weight, so
+    /// panes of weights 2 and 1 get two thirds and one third of the height
+    /// the panes share. `None` is a weight of 1, so panes without a stored
+    /// height share the dock equally. A stored height is a finite positive
+    /// number. Omitted from the file when `None`, so older files round-trip
+    /// byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
 }
 
 impl Default for PlotPane {
@@ -261,7 +272,16 @@ impl Default for PlotPane {
             x_log: None,
             y_scale: YScale::Linear,
             y2_range: None,
+            height: None,
         }
+    }
+}
+
+impl PlotPane {
+    /// Whether `height` is a usable stored pane height: finite and
+    /// positive.
+    pub fn is_valid_height(height: f32) -> bool {
+        height.is_finite() && height > 0.0
     }
 }
 

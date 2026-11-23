@@ -60,12 +60,16 @@ fn main() {
         });
 }
 
-/// Initializes the kit, motion (D19) and the shortcuts. The headless tests
-/// start the same way, so they run the application's setup.
+/// Initializes the kit, motion (D19), the shortcuts and the dialog windows
+/// (D22: their modal layer goes into every window opened afterwards, and
+/// their title row shows the logo). The headless tests start the same way,
+/// so they run the application's setup.
 fn setup(cx: &mut App) {
     gpui_kit::init(cx);
     motion::init(cx);
     actions::bind_keys(cx);
+    xsim_editor::dialog_window::init(cx);
+    xsim_editor::dialog_window::set_title_icon(cx, workspace::dialog_logo);
 }
 
 /// A centred window with the kit's custom title bar.

@@ -37,6 +37,8 @@ mod motion_tests;
 #[cfg(test)]
 mod tests;
 
+pub use title_bar::dialog_logo;
+
 use crate::diagnostics::Diagnostics;
 use crate::ids::TabIdAllocator;
 use crate::prompts::{NativePrompts, Prompts};
@@ -46,6 +48,7 @@ use gpui_kit::{prelude::*, *};
 use recovery::Recovery;
 use std::path::PathBuf;
 use std::rc::Rc;
+use tab_strip::TabReveal;
 use xsim_project::Project;
 use xsim_project::appdata::{AppData, AppSettings};
 
@@ -108,9 +111,12 @@ pub struct Workspace {
     /// Scroll position of the circuit tab strip, so a new circuit can be
     /// scrolled into view.
     tab_scroll: ScrollHandle,
-    /// Whether the active circuit's tab still has to be scrolled into view
-    /// after a project was shown.
-    reveal_active_tab: bool,
+    /// How far the active circuit's tab still has to be scrolled into view
+    /// after a project was shown or Run changed width.
+    reveal_active_tab: TabReveal,
+    /// The analysis name Run showed on the last frame (D23), to notice
+    /// when Run changes width.
+    run_analysis_shown: Option<&'static str>,
     /// Counts started runs so a late outcome never lands in a newer run.
     run_generation: u64,
     focus: FocusHandle,
@@ -148,7 +154,8 @@ impl Workspace {
             recovery,
             renaming: None,
             tab_scroll: ScrollHandle::new(),
-            reveal_active_tab: true,
+            reveal_active_tab: TabReveal::Pending,
+            run_analysis_shown: None,
             run_generation: 0,
             run_focus: cx.focus_handle(),
             settings_focus: cx.focus_handle(),
@@ -205,7 +212,7 @@ impl Workspace {
         }
         // The strip may still be scrolled for the previous project, or not
         // be laid out yet.
-        self.reveal_active_tab = true;
+        self.reveal_active_tab = TabReveal::Pending;
     }
 
     /// Moves keyboard focus to the active schematic editor.

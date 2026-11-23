@@ -6,7 +6,7 @@ use super::LibraryFilter;
 use super::keys::pressable;
 use super::view::LibraryView;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
@@ -76,7 +76,7 @@ impl LibraryView {
                         pressable(Button::new("library-cancel"))
                             .label("Cancel")
                             .debug_selector(|| "library-cancel".into())
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                            .on_click(|_, window, cx| crate::dialog_window::close(window, cx)),
                     )
                     .child(
                         pressable(Button::new("library-pick"))

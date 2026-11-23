@@ -7,10 +7,11 @@ use crate::diagnostics::{Severity, Source};
 use crate::prompts::UnsavedChoice;
 use crate::simulation::summary::RunStatus;
 use crate::test_support::{
-    TestEnv, click, close, double_click, init, long_run_project, open, press, rc_project,
-    rc_schematic, series_capacitor_project, switch_project, wait_until,
+    TestEnv, click, close, dialog, double_click, has_dialog, init, long_run_project, open, press,
+    press_in_dialog, rc_project, rc_schematic, series_capacitor_project, switch_project,
+    wait_until,
 };
-use gpui_kit::component::{ActiveTheme, WindowExt};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::{Entity, Focusable, TestAppContext, VisualTestContext};
 use std::fs;
 use xsim_editor::{EditorEvent, ProbeRequest};
@@ -407,11 +408,8 @@ fn edits_are_snapshotted_and_offered_after_a_crash(cx: &mut TestAppContext) {
 
     let (restarted, mut second) = open(cx, &env, None);
     assert_eq!(restarted.read_with(&second, |w, _| w.orphan_count()), 1);
-    assert!(
-        second.update(|window, cx| window.has_active_dialog(cx)),
-        "recovery is offered"
-    );
-    click("recovery-restore-0", &mut second);
+    assert!(has_dialog(&second), "recovery is offered");
+    click("recovery-restore-0", &mut dialog(&second));
     restarted.read_with(&second, |w, _| {
         assert_eq!(w.tabs.len(), 2, "the recovered project has both circuits");
         assert!(w.doc.dirty, "recovered work is unsaved");
@@ -454,9 +452,10 @@ fn the_analysis_dialog_opens_and_applies(cx: &mut TestAppContext) {
     let path = env.write_project("rc.xsim_proj", &rc_project());
     let (workspace, mut window) = open(cx, &env, Some(&path));
     window.dispatch_action(OpenAnalysisSettings);
-    assert!(window.update(|window, cx| window.has_active_dialog(cx)));
-    click("analysis-apply", &mut window);
-    assert!(!window.update(|window, cx| window.has_active_dialog(cx)));
+    window.run_until_parked();
+    assert!(has_dialog(&window));
+    click("analysis-apply", &mut dialog(&window));
+    assert!(!has_dialog(&window));
     assert!(
         !workspace.read_with(&window, |w, _| w.doc.dirty),
         "nothing changed"
@@ -473,8 +472,10 @@ fn the_analysis_dialog_switches_analysis_with_its_buttons(cx: &mut TestAppContex
     let path = env.write_project("rc.xsim_proj", &rc_project());
     let (workspace, mut window) = open(cx, &env, Some(&path));
     window.dispatch_action(OpenAnalysisSettings);
-    click("analysis-kind-ac", &mut window);
-    click("analysis-apply", &mut window);
+    window.run_until_parked();
+    let mut settings = dialog(&window);
+    click("analysis-kind-ac", &mut settings);
+    click("analysis-apply", &mut settings);
     workspace.read_with(&window, |w, _| {
         assert_eq!(
             w.doc.project.circuits[0].simulation.selected,
@@ -834,9 +835,9 @@ fn an_ac_run_without_an_ac_source_warns(cx: &mut TestAppContext) {
     close(&mut window);
 }
 
-/// Whether the window shows a dialog.
+/// Whether a dialog window is open over the window.
 fn dialog_open(cx: &mut VisualTestContext) -> bool {
-    cx.update(|window, cx| window.has_active_dialog(cx))
+    has_dialog(cx)
 }
 
 /// D14, in the real dialog: Tab reaches the analysis buttons, and Enter or
@@ -859,17 +860,18 @@ fn the_analysis_buttons_work_from_the_keyboard_in_the_dialog(cx: &mut TestAppCon
     ] {
         window.dispatch_action(OpenAnalysisSettings);
         window.run_until_parked();
+        let mut settings = dialog(&window);
         let before = applied(&window);
         for _ in 0..tabs {
-            press("tab", &mut window);
+            press("tab", &mut settings);
         }
-        press(key, &mut window);
+        press(key, &mut settings);
         assert!(
             dialog_open(&mut window),
             "{key} on a button closed the dialog"
         );
         assert_eq!(applied(&window), before, "{key} applied the dialog");
-        click("analysis-apply", &mut window);
+        click("analysis-apply", &mut settings);
         assert_eq!(applied(&window), (expected, true), "{key} chose a button");
     }
     close(&mut window);
@@ -890,19 +892,20 @@ fn enter_in_the_analysis_dialog_applies_it(cx: &mut TestAppContext) {
     };
     window.dispatch_action(OpenAnalysisSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     // The four analysis buttons, then the transient's stop time.
     for _ in 0..5 {
-        press("tab", &mut window);
+        press("tab", &mut settings);
     }
-    window.simulate_keystrokes(primary!("a"));
-    window.simulate_input("soon");
-    press("enter", &mut window);
+    settings.simulate_keystrokes(primary!("a"));
+    settings.simulate_input("soon");
+    press_in_dialog("enter", &mut settings);
     assert!(dialog_open(&mut window), "an invalid value is not applied");
     assert_eq!(stop(&window), 5e-3);
 
-    window.simulate_keystrokes(primary!("a"));
-    window.simulate_input("7m");
-    press("enter", &mut window);
+    settings.simulate_keystrokes(primary!("a"));
+    settings.simulate_input("7m");
+    press_in_dialog("enter", &mut settings);
     assert!(!dialog_open(&mut window), "Enter applies and closes");
     assert!((stop(&window) - 7e-3).abs() < 1e-12, "{}", stop(&window));
     assert!(workspace.read_with(&window, |w, _| w.doc.dirty));
@@ -911,7 +914,8 @@ fn enter_in_the_analysis_dialog_applies_it(cx: &mut TestAppContext) {
 
 /// Enter that no button takes applies the dialog, so a choice made with
 /// the mouse is kept. On a focused footer button it does what that button
-/// does, and on the dialog's close button it closes without applying.
+/// does. The window's close button (D22) is no tab stop; a click on it
+/// closes without applying.
 #[gpui_kit::test]
 fn enter_applies_the_analysis_dialog_except_on_close_and_cancel(cx: &mut TestAppContext) {
     init(cx);
@@ -924,11 +928,17 @@ fn enter_applies_the_analysis_dialog_except_on_close_and_cancel(cx: &mut TestApp
         })
     };
     let unchanged = (AnalysisChoice::Transient, false);
-    // Backwards from the form: the close button, Apply, Cancel.
+    window.dispatch_action(OpenAnalysisSettings);
+    window.run_until_parked();
+    let mut settings = dialog(&window);
+    click("analysis-kind-ac", &mut settings);
+    click("dialog-close", &mut settings);
+    assert!(!dialog_open(&mut window), "the close button closes");
+    assert_eq!(applied(&window), unchanged, "the close button");
+    // Backwards from the form: Apply, Cancel.
     for (choose, back, expected) in [
-        ("analysis-kind-ac", 1, unchanged),
-        ("analysis-kind-ac", 3, unchanged),
-        ("analysis-kind-ac", 2, (AnalysisChoice::Ac, true)),
+        ("analysis-kind-ac", 2, unchanged),
+        ("analysis-kind-ac", 1, (AnalysisChoice::Ac, true)),
         (
             "analysis-kind-op",
             0,
@@ -937,11 +947,12 @@ fn enter_applies_the_analysis_dialog_except_on_close_and_cancel(cx: &mut TestApp
     ] {
         window.dispatch_action(OpenAnalysisSettings);
         window.run_until_parked();
-        click(choose, &mut window);
+        let mut settings = dialog(&window);
+        click(choose, &mut settings);
         for _ in 0..back {
-            press("shift-tab", &mut window);
+            press("shift-tab", &mut settings);
         }
-        press("enter", &mut window);
+        press_in_dialog("enter", &mut settings);
         assert!(!dialog_open(&mut window), "{back} back: Enter closes");
         assert_eq!(applied(&window), expected, "{back} back");
         keyboard_back_after_enter(&mut window);
@@ -949,9 +960,9 @@ fn enter_applies_the_analysis_dialog_except_on_close_and_cancel(cx: &mut TestApp
     close(&mut window);
 }
 
-/// Not an animation: when Enter closes a dialog through the kit's
-/// confirmation, the kit hands the keyboard back after a fixed 250 ms,
-/// whatever the motion setting. Lets that time pass.
+/// Lets time pass after Enter closed a dialog, as a user would before the
+/// next key. (The kit's in-window dialogs handed the keyboard back after a
+/// fixed 250 ms; a dialog window gives it back at once, D22.)
 fn keyboard_back_after_enter(window: &mut VisualTestContext) {
     window
         .executor()
@@ -1154,8 +1165,11 @@ fn a_newer_project_shows_an_out_of_date_result_read_only(cx: &mut TestAppContext
         assert_out_of_date(&workspace, &mut window, name);
         close(&mut window);
     }
-    assert_eq!(stale_hint_text(false), "Results out of date - press F5");
-    assert!(!stale_hint_text(true).contains("F5"));
+    assert_eq!(
+        stale_hint_text(false, false),
+        "Results out of date - press F5"
+    );
+    assert!(!stale_hint_text(true, false).contains("F5"));
 }
 
 /// Lets `window`'s session write its recovery snapshot and copies it into
@@ -1191,8 +1205,8 @@ fn crash_and_restore(
     window: &mut VisualTestContext,
 ) -> (Entity<Workspace>, VisualTestContext) {
     leave_crashed_session(env, window);
-    let (restarted, mut second) = open(cx, env, None);
-    click("recovery-restore-0", &mut second);
+    let (restarted, second) = open(cx, env, None);
+    click("recovery-restore-0", &mut dialog(&second));
     assert_eq!(restarted.read_with(&second, |w, _| w.orphan_count()), 0);
     (restarted, second)
 }
@@ -1392,9 +1406,12 @@ fn the_theme_buttons_match_the_analysis_buttons(cx: &mut TestAppContext) {
     let (_, mut window) = open(cx, &env, None);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
-    let rem = window.update(|window, _| window.rem_size());
-    let light = window.debug_bounds("theme-light").expect("Light is shown");
-    let dark = window.debug_bounds("theme-dark").expect("Dark is shown");
+    let mut settings = dialog(&window);
+    let rem = settings.update(|window, _| window.rem_size());
+    let light = settings
+        .debug_bounds("theme-light")
+        .expect("Light is shown");
+    let dark = settings.debug_bounds("theme-dark").expect("Dark is shown");
     assert_eq!(light.top(), dark.top(), "one row");
     assert_eq!(light.right(), dark.left(), "joined, no gap");
     for button in [light, dark] {
@@ -1412,12 +1429,13 @@ fn clicking_a_theme_button_switches_the_theme(cx: &mut TestAppContext) {
     let (workspace, mut window) = open(cx, &env, None);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     for (button, expected) in [
         ("theme-dark", ThemePreference::Dark),
         ("theme-light", ThemePreference::Light),
         ("theme-dark", ThemePreference::Dark),
     ] {
-        click(button, &mut window);
+        click(button, &mut settings);
         assert_eq!(
             workspace.read_with(&window, |w, _| w.settings().theme),
             expected,
@@ -1464,6 +1482,7 @@ fn the_chosen_theme_button_looks_selected(cx: &mut TestAppContext) {
     let (_, mut window) = open(cx, &env, None);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     let mut looks = Vec::new();
     for (chosen, other) in [
         ("theme-dark", "theme-light"),
@@ -1471,10 +1490,10 @@ fn the_chosen_theme_button_looks_selected(cx: &mut TestAppContext) {
         ("theme-dark", "theme-light"),
     ] {
         // No forced repaint: the click itself must repaint the buttons.
-        click(chosen, &mut window);
+        click(chosen, &mut settings);
         let (selected, unselected) = (
-            painted_look(chosen, &mut window),
-            painted_look(other, &mut window),
+            painted_look(chosen, &mut settings),
+            painted_look(other, &mut settings),
         );
         assert_ne!(selected, unselected, "{chosen} looks like {other}");
         looks.push((selected, unselected));
@@ -1485,8 +1504,9 @@ fn the_chosen_theme_button_looks_selected(cx: &mut TestAppContext) {
 }
 
 /// Tab reaches the theme buttons; Enter or Space chooses the focused one
-/// and keeps the dialog open. Enter on Done or the close button closes it,
-/// and Enter that no button takes closes it like Done.
+/// and keeps the dialog open. Enter on Done closes it, and Enter that no
+/// button takes closes it like Done. The window's close button (D22) is no
+/// tab stop: Tab goes from Done round to Light.
 #[gpui_kit::test]
 fn the_settings_dialog_works_from_the_keyboard(cx: &mut TestAppContext) {
     init(cx);
@@ -1495,42 +1515,56 @@ fn the_settings_dialog_works_from_the_keyboard(cx: &mut TestAppContext) {
     let theme = |window: &VisualTestContext| workspace.read_with(window, |w, _| w.settings().theme);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
-    // Tab order: Light, Dark, interface scale, Done, close.
-    press("tab", &mut window);
-    press("tab", &mut window);
-    press("enter", &mut window);
+    let mut settings = dialog(&window);
+    // Tab order: Light, Dark, interface scale, Done.
+    press("tab", &mut settings);
+    press("tab", &mut settings);
+    press("enter", &mut settings);
     assert_eq!(theme(&window), ThemePreference::Dark, "Enter chose Dark");
     assert!(window.update(|_, cx| cx.theme().is_dark()));
     assert!(
         dialog_open(&mut window),
         "Enter on a theme closed the dialog"
     );
-    press("shift-tab", &mut window);
-    press("space", &mut window);
+    press("shift-tab", &mut settings);
+    press("space", &mut settings);
     assert_eq!(theme(&window), ThemePreference::Light, "Space chose Light");
     assert!(dialog_open(&mut window));
-    press("enter", &mut window);
+    press("enter", &mut settings);
     assert_eq!(theme(&window), ThemePreference::Light);
     assert!(
         dialog_open(&mut window),
         "Enter on the chosen theme keeps it"
     );
     for _ in 0..3 {
-        press("tab", &mut window);
+        press("tab", &mut settings);
     }
-    press("enter", &mut window);
+    press_in_dialog("enter", &mut settings);
     assert!(!dialog_open(&mut window), "Enter on Done closes");
 
-    for tabs in [0, 5] {
+    for tabs in [0, 4] {
         window.dispatch_action(OpenSettings);
         window.run_until_parked();
+        let mut settings = dialog(&window);
         for _ in 0..tabs {
-            press("tab", &mut window);
+            press("tab", &mut settings);
         }
-        press("enter", &mut window);
+        press_in_dialog("enter", &mut settings);
         assert!(!dialog_open(&mut window), "{tabs} tabs: Enter closes");
         assert_eq!(theme(&window), ThemePreference::Light, "{tabs} tabs");
     }
+
+    // Done, then round to Light, where Enter chooses Light again.
+    window.dispatch_action(OpenSettings);
+    window.run_until_parked();
+    let mut settings = dialog(&window);
+    for _ in 0..5 {
+        press("tab", &mut settings);
+    }
+    press("enter", &mut settings);
+    assert!(dialog_open(&mut window), "Enter on Light keeps the dialog");
+    press_in_dialog("escape", &mut settings);
+    assert!(!dialog_open(&mut window));
     close(&mut window);
 }
 
@@ -1545,17 +1579,18 @@ fn the_interface_scale_menu_opens_from_the_keyboard(cx: &mut TestAppContext) {
         |window: &VisualTestContext| workspace.read_with(window, |w, _| w.settings().ui_scale);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     for _ in 0..3 {
-        press("tab", &mut window);
+        press("tab", &mut settings);
     }
-    press("enter", &mut window);
+    press("enter", &mut settings);
     assert!(
         dialog_open(&mut window),
         "Enter on the scale closed the dialog"
     );
     assert_eq!(scale(&window), 1.0);
-    press("down", &mut window);
-    press("enter", &mut window);
+    press("down", &mut settings);
+    press("enter", &mut settings);
     assert!(
         dialog_open(&mut window),
         "choosing a scale keeps the dialog"
@@ -1577,10 +1612,11 @@ fn enter_presses_the_focused_recovery_button(cx: &mut TestAppContext) {
         let crashed = leave_crashed_session(&env, &mut window);
         let (restarted, mut second) = open(cx, &env, None);
         assert!(dialog_open(&mut second), "{button}: recovery is offered");
+        let mut recovery = dialog(&second);
         for _ in 0..tabs {
-            press("tab", &mut second);
+            press("tab", &mut recovery);
         }
-        press("enter", &mut second);
+        press_in_dialog("enter", &mut recovery);
         assert!(!dialog_open(&mut second), "{button}: the dialog closed");
         let (circuits, orphans) =
             restarted.read_with(&second, |w, _| (w.tabs.len(), w.orphan_count()));
@@ -1614,18 +1650,19 @@ fn escape_closes_the_scale_menu_before_the_settings(cx: &mut TestAppContext) {
         |window: &VisualTestContext| workspace.read_with(window, |w, _| w.settings().ui_scale);
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     for _ in 0..3 {
-        press("tab", &mut window);
+        press("tab", &mut settings);
     }
-    press("enter", &mut window);
-    press("down", &mut window);
-    press("escape", &mut window);
+    press("enter", &mut settings);
+    press("down", &mut settings);
+    press("escape", &mut settings);
     assert!(
         dialog_open(&mut window),
         "Escape in the menu closed the dialog"
     );
     assert_eq!(scale(&window), 1.0, "Escape chose a scale");
-    press("escape", &mut window);
+    press_in_dialog("escape", &mut settings);
     assert!(
         !dialog_open(&mut window),
         "the second Escape closes the dialog"
@@ -1635,8 +1672,8 @@ fn escape_closes_the_scale_menu_before_the_settings(cx: &mut TestAppContext) {
 }
 
 /// With two crashed sessions, Enter on the first Discard discards it and
-/// offers the other one again in a new dialog, which has the keyboard:
-/// Tab and Enter there restore it.
+/// leaves the other one in the dialog, which keeps the keyboard from its
+/// top: Tab and Enter there restore it.
 #[gpui_kit::test]
 fn the_recovery_dialog_works_from_the_keyboard_with_two_snapshots(cx: &mut TestAppContext) {
     init(cx);
@@ -1651,20 +1688,31 @@ fn the_recovery_dialog_works_from_the_keyboard_with_two_snapshots(cx: &mut TestA
     }
     let (restarted, mut second) = open(cx, &env, None);
     assert_eq!(restarted.read_with(&second, |w, _| w.orphan_count()), 2);
+    let mut recovery = dialog(&second);
+    // D22: centred with two rows too.
+    let owner = second.update(|window, _| window.bounds());
+    let (bounds, rem) = recovery.update(|window, _| (window.bounds(), window.rem_size()));
+    assert!(
+        (bounds.center().y - owner.center().y).abs() <= rem * 0.5,
+        "centred: {bounds:?} over {owner:?}"
+    );
     // Tab order: Discard, Restore of each snapshot, then Decide later.
-    press("tab", &mut second);
-    press("enter", &mut second);
+    press("tab", &mut recovery);
+    press("enter", &mut recovery);
     second.run_until_parked();
     assert!(
         dialog_open(&mut second),
         "the other snapshot is offered again"
     );
     assert_eq!(restarted.read_with(&second, |w, _| w.orphan_count()), 1);
-    assert!(second.debug_bounds("recovery-restore-0").is_some());
-    assert!(second.debug_bounds("recovery-restore").is_none(), "one row");
-    press("tab", &mut second);
-    press("tab", &mut second);
-    press("enter", &mut second);
+    assert!(recovery.debug_bounds("recovery-restore-0").is_some());
+    assert!(
+        recovery.debug_bounds("recovery-restore").is_none(),
+        "one row"
+    );
+    press("tab", &mut recovery);
+    press("tab", &mut recovery);
+    press_in_dialog("enter", &mut recovery);
     assert!(!dialog_open(&mut second), "Restore closed the dialog");
     let (circuits, orphans) = restarted.read_with(&second, |w, _| (w.tabs.len(), w.orphan_count()));
     assert_eq!((circuits, orphans), (2, 0), "restored");
@@ -1794,5 +1842,348 @@ fn a_renamed_control_source_fails_the_run_naming_it(cx: &mut TestAppContext) {
     workspace.read_with(&window, |w, _| {
         assert_eq!(w.active_tab().status, RunStatus::Failed);
     });
+    close(&mut window);
+}
+
+/// D22: opens the dialog `which` names over the main window.
+fn open_workspace_dialog(which: &str, window: &mut VisualTestContext) {
+    match which {
+        "analysis" => window.dispatch_action(OpenAnalysisSettings),
+        _ => window.dispatch_action(OpenSettings),
+    }
+    window.run_until_parked();
+}
+
+/// D22: the analysis settings and the settings open in windows of their
+/// own, titled and centred over the main window. The main window ignores a
+/// click on Run and the dock's shortcut meanwhile, and a second Settings
+/// opens nothing. Escape closes the window without applying anything.
+#[gpui_kit::test]
+fn workspace_dialogs_open_in_windows_of_their_own(cx: &mut TestAppContext) {
+    use gpui_kit::VisualContext as _;
+    init(cx);
+    let env = TestEnv::new();
+    let path = env.write_project("rc.xsim_proj", &rc_project());
+    let (workspace, mut window) = open(cx, &env, Some(&path));
+    let owner = window.update(|window, _| window.bounds());
+    let state = |window: &VisualTestContext| {
+        workspace.read_with(window, |w, _| {
+            (
+                w.doc.dirty,
+                w.doc.project.layout.diagnostics_open,
+                w.active_tab().is_running(),
+                w.settings().theme,
+            )
+        })
+    };
+    let before = state(&window);
+    for (which, title) in [("analysis", "Analysis settings"), ("settings", "Settings")] {
+        open_workspace_dialog(which, &mut window);
+        assert_eq!(window.windows().len(), 2, "{which}: a window of its own");
+        let mut settings = dialog(&window);
+        assert_eq!(settings.window_title().as_deref(), Some(title));
+        assert!(
+            settings.debug_bounds("dialog-logo").is_some(),
+            "{which}: the logo in the title row (D20)"
+        );
+        assert_eq!(
+            settings
+                .cx
+                .read(|app| xsim_editor::dialog_window::owner_of(settings.window_handle(), app)),
+            Some(window.window_handle()),
+            "{which}: over the main window"
+        );
+        let (bounds, rem) = settings.update(|window, _| (window.bounds(), window.rem_size()));
+        assert!(
+            (bounds.center().x - owner.center().x).abs() < gpui_kit::px(1.),
+            "{which}: centred across {bounds:?} over {owner:?}"
+        );
+        assert!(
+            (bounds.center().y - owner.center().y).abs() <= rem * 0.5,
+            "{which}: centred down {bounds:?} over {owner:?}"
+        );
+        assert!(
+            bounds.top() >= owner.top() && bounds.bottom() <= owner.bottom(),
+            "{which}: over the main window {bounds:?} {owner:?}"
+        );
+
+        click("run-button", &mut window);
+        window.simulate_keystrokes(primary!("j"));
+        window.dispatch_action(OpenSettings);
+        window.run_until_parked();
+        assert_eq!(state(&window), before, "{which}: the main window reacted");
+        assert_eq!(window.windows().len(), 2, "{which}: one dialog at a time");
+        assert_eq!(
+            window.update(|_, cx| cx.active_window()),
+            Some(settings.window_handle()),
+            "{which}: the dialog came to the front"
+        );
+
+        press_in_dialog("escape", &mut settings);
+        assert!(!has_dialog(&window), "{which}: Escape closed it");
+        assert_eq!(state(&window), before, "{which}: nothing applied");
+    }
+    window.simulate_keystrokes(primary!("j"));
+    assert!(
+        workspace.read_with(&window, |w, _| w.doc.project.layout.diagnostics_open) != before.1,
+        "the main window has the keyboard again"
+    );
+    close(&mut window);
+}
+
+/// D22: a change of interface scale in the settings window applies to
+/// every window, and the settings window keeps fitting its content at the
+/// new scale.
+#[gpui_kit::test]
+fn the_settings_window_follows_the_interface_scale(cx: &mut TestAppContext) {
+    init(cx);
+    let env = TestEnv::new();
+    let (workspace, mut window) = open(cx, &env, None);
+    open_workspace_dialog("settings", &mut window);
+    let mut settings = dialog(&window);
+    let width = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| (window.bounds().size.width, window.rem_size()))
+    };
+    let (before, rem) = width(&mut settings);
+    assert_eq!(before, rem * 29., "29 rem wide");
+    // Light, Dark, the interface scale; its menu; its fifth scale.
+    for key in [
+        "tab", "tab", "tab", "enter", "down", "down", "down", "down", "down",
+    ] {
+        press(key, &mut settings);
+    }
+    press("enter", &mut settings);
+    let scale = workspace.read_with(&window, |w, _| w.settings().ui_scale);
+    assert_eq!(scale, 1.25, "125% was chosen");
+    let (after, rem) = width(&mut settings);
+    assert_eq!(
+        rem,
+        gpui_kit::px(16. * scale),
+        "the settings window's scale"
+    );
+    assert_eq!(after, rem * 29., "still 29 rem wide");
+    assert_eq!(
+        window.update(|window, _| window.rem_size()),
+        rem,
+        "the main window's scale"
+    );
+    let content = settings.debug_bounds("dialog-0").expect("the content");
+    let viewport = settings.update(|window, _| window.viewport_size());
+    assert!(
+        (content.bottom() - viewport.height).abs() < gpui_kit::px(1.),
+        "fits its content: {content:?} in {viewport:?}"
+    );
+    close(&mut window);
+}
+
+/// D22: Apply in the analysis settings window stores the settings of the
+/// main window's circuit; closing the main window closes the dialog.
+#[gpui_kit::test]
+fn the_analysis_window_applies_and_closes_with_the_main_window(cx: &mut TestAppContext) {
+    init(cx);
+    let env = TestEnv::new();
+    let path = env.write_project("rc.xsim_proj", &rc_project());
+    let (workspace, mut window) = open(cx, &env, Some(&path));
+    open_workspace_dialog("analysis", &mut window);
+    let mut settings = dialog(&window);
+    click("analysis-kind-dc", &mut settings);
+    click("analysis-apply", &mut settings);
+    assert!(!has_dialog(&window), "Apply closes");
+    assert_eq!(
+        workspace.read_with(&window, |w, _| w.doc.project.circuits[0]
+            .simulation
+            .selected),
+        AnalysisChoice::DcSweep
+    );
+    open_workspace_dialog("analysis", &mut window);
+    assert_eq!(window.windows().len(), 2);
+    close(&mut window);
+    assert!(
+        settings.windows().is_empty(),
+        "closing the main window closed its dialog"
+    );
+}
+
+/// D22: the crash recovery opens at start in a window of its own, centred
+/// over the new main window, which ignores clicks and keys until the work
+/// is restored there. Escape closes the window and keeps the snapshot for
+/// later.
+#[gpui_kit::test]
+fn the_recovery_opens_in_a_window_over_the_new_main_window(cx: &mut TestAppContext) {
+    use gpui_kit::VisualContext as _;
+    init(cx);
+    let env = TestEnv::new();
+    let (_, mut window) = open(cx, &env, None);
+    window.dispatch_action(NewCircuit);
+    let crashed = leave_crashed_session(&env, &mut window);
+    let (_, mut later) = open(cx, &env, None);
+    press_in_dialog("escape", &mut dialog(&later));
+    assert!(!has_dialog(&later), "Escape closed the recovery");
+    assert!(crashed.exists(), "and kept the snapshot");
+    close(&mut later);
+
+    let (restarted, mut second) = open(cx, &env, None);
+    assert_eq!(second.windows().len(), 3, "two main windows and the dialog");
+    let mut recovery = dialog(&second);
+    assert_eq!(
+        recovery.window_title().as_deref(),
+        Some("Recover unsaved work")
+    );
+    let owner = second.update(|window, _| window.bounds());
+    let (bounds, rem) = recovery.update(|window, _| (window.bounds(), window.rem_size()));
+    assert!(
+        (bounds.center().x - owner.center().x).abs() < gpui_kit::px(1.)
+            && (bounds.center().y - owner.center().y).abs() <= rem * 0.5,
+        "centred: {bounds:?} over {owner:?}"
+    );
+    assert!(!has_dialog(&window), "the first window is free");
+    second.simulate_keystrokes(primary!("t"));
+    click("add-circuit", &mut second);
+    second.run_until_parked();
+    assert_eq!(
+        restarted.read_with(&second, |w, _| w.tabs.len()),
+        1,
+        "the blocked window ignored New circuit"
+    );
+    click("recovery-restore-0", &mut recovery);
+    assert!(!has_dialog(&second));
+    assert_eq!(restarted.read_with(&second, |w, _| w.tabs.len()), 2);
+    assert_eq!(
+        second.update(|_, cx| cx.active_window()),
+        Some(second.window_handle()),
+        "the restored window is active"
+    );
+    close(&mut second);
+    close(&mut window);
+}
+
+/// D22: Escape and the window's close button close the analysis settings
+/// without applying what was changed in them: another analysis and a typed
+/// stop time.
+#[gpui_kit::test]
+fn closing_the_analysis_window_applies_nothing(cx: &mut TestAppContext) {
+    init(cx);
+    let env = TestEnv::new();
+    let path = env.write_project("rc.xsim_proj", &rc_project());
+    let (workspace, mut window) = open(cx, &env, Some(&path));
+    let stored = |window: &VisualTestContext| {
+        workspace.read_with(window, |w, _| {
+            (w.doc.project.circuits[0].simulation.clone(), w.doc.dirty)
+        })
+    };
+    let before = stored(&window);
+    for how in ["escape", "close button"] {
+        window.dispatch_action(OpenAnalysisSettings);
+        window.run_until_parked();
+        let mut settings = dialog(&window);
+        // The four analysis buttons, then the transient's stop time.
+        for _ in 0..5 {
+            press("tab", &mut settings);
+        }
+        settings.simulate_keystrokes(primary!("a"));
+        settings.simulate_input("7m");
+        click("analysis-kind-dc", &mut settings);
+        match how {
+            "escape" => press_in_dialog("escape", &mut settings),
+            _ => click("dialog-close", &mut settings),
+        }
+        assert!(!has_dialog(&window), "{how} closed the window");
+        assert_eq!(stored(&window), before, "{how} applied nothing");
+    }
+    close(&mut window);
+}
+
+/// D22: the operating system asking the main window to close while a
+/// dialog is open over it asks about unsaved changes as usual; once the
+/// main window closes, the dialog closes with it and nothing is left open,
+/// so the application quits (it quits when its last window closes).
+#[gpui_kit::test]
+fn closing_the_main_window_over_a_dialog_closes_both(cx: &mut TestAppContext) {
+    init(cx);
+    let env = TestEnv::new();
+    let (_, mut window) = open(cx, &env, None);
+    window.dispatch_action(NewCircuit);
+    window.dispatch_action(OpenSettings);
+    window.run_until_parked();
+    let settings = dialog(&window);
+    env.prompts
+        .unsaved
+        .borrow_mut()
+        .push_back(UnsavedChoice::Cancel);
+    assert!(
+        !window.simulate_close(),
+        "Cancel keeps the main window open"
+    );
+    window.run_until_parked();
+    assert!(has_dialog(&window), "and its dialog");
+    env.prompts
+        .unsaved
+        .borrow_mut()
+        .push_back(UnsavedChoice::Discard);
+    assert!(
+        window.simulate_close(),
+        "Discard lets the main window close"
+    );
+    // The platform closes it then.
+    close(&mut window);
+    assert!(settings.windows().is_empty(), "the dialog closed with it");
+}
+
+/// D22: the menus of a dialog stay inside its window, which is smaller than
+/// the main window: the DC sweep's source menu of a schematic with many
+/// sources scrolls within the analysis window, so every source can be
+/// chosen.
+#[gpui_kit::test]
+fn a_long_source_menu_fits_the_analysis_window(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, point, px};
+    init(cx);
+    let env = TestEnv::new();
+    let mut project = rc_project();
+    let circuit = &mut project.circuits[0];
+    for n in 2..=40 {
+        let id = circuit.schematic.allocate_id();
+        circuit.schematic.components.push(xsim_project::Component {
+            id,
+            name: format!("V{n}"),
+            position: xsim_project::Point::new(40 + 8 * n, 40),
+            orientation: Default::default(),
+            part: Part::default_for(xsim_project::PartKind::VoltageSource),
+        });
+    }
+    circuit.simulation.selected = AnalysisChoice::DcSweep;
+    let path = env.write_project("sources.xsim_proj", &project);
+    let (workspace, mut window) = open(cx, &env, Some(&path));
+    window.dispatch_action(OpenAnalysisSettings);
+    window.run_until_parked();
+    let mut settings = dialog(&window);
+    click("dc-source", &mut settings);
+    let viewport = settings.update(|window, _| window.viewport_size());
+    let first = settings
+        .debug_bounds("dc-source-V1")
+        .expect("the menu is open");
+    for _ in 0..20 {
+        settings.simulate_event(ScrollEvent {
+            position: first.center(),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-200.))),
+            ..ScrollEvent::default()
+        });
+    }
+    settings.run_until_parked();
+    let last = settings
+        .debug_bounds("dc-source-V40")
+        .expect("the last source is in the menu");
+    assert!(
+        last.top() >= px(0.) && last.bottom() <= viewport.height,
+        "{last:?} in a {viewport:?} window"
+    );
+    settings.simulate_mouse_move(last.center(), None, Modifiers::default());
+    settings.simulate_click(last.center(), Modifiers::default());
+    settings.run_until_parked();
+    click("analysis-apply", &mut settings);
+    assert!(!has_dialog(&window), "applied");
+    let source = workspace.read_with(&window, |w, _| {
+        w.doc.project.circuits[0].simulation.dc.source.clone()
+    });
+    assert_eq!(source, "V40");
     close(&mut window);
 }

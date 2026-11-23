@@ -1,5 +1,6 @@
 //! Rubber-band sweep (D20): parts touching pin to pin, moved by every
-//! displacement within ten units, alone and as part of a selection. Every
+//! displacement within twenty grid units (ten schema-2 units, so every dot
+//! in between), alone and as part of a selection. Every
 //! move must keep every pin on the net it was on (the touching pins stay
 //! joined, and no part is shorted or joined to anything new) and add no
 //! diagonal. Moves that land a moved pin on another pin, a label or a wire
@@ -17,7 +18,7 @@ use xsim_project::{
 };
 
 /// Farthest displacement tried along each axis.
-const REACH: i32 = 10;
+const REACH: i32 = 20;
 
 fn p(x: i32, y: i32) -> Point {
     Point::new(x, y)
@@ -52,16 +53,16 @@ fn fixtures() -> Vec<(&'static str, Schematic)> {
     use PartKind::*;
     let mut labelled = drawing(vec![
         part(1, Resistor, p(0, 0), 0),
-        part(2, Resistor, p(4, 0), 0),
+        part(2, Resistor, p(8, 0), 0),
     ]);
     labelled.wires.push(Wire {
         id: 3,
-        points: vec![p(2, 0), p(2, 4)],
+        points: vec![p(4, 0), p(4, 8)],
     });
     labelled.labels.push(NetLabel {
         id: 4,
         name: "mid".into(),
-        position: p(2, 4),
+        position: p(4, 8),
     });
     labelled.next_id = 5;
     vec![
@@ -69,35 +70,35 @@ fn fixtures() -> Vec<(&'static str, Schematic)> {
             "pair",
             drawing(vec![
                 part(1, Resistor, p(0, 0), 0),
-                part(2, Resistor, p(4, 0), 0),
+                part(2, Resistor, p(8, 0), 0),
             ]),
         ),
         (
             "chain",
             drawing(vec![
                 part(1, Resistor, p(0, 0), 0),
-                part(2, Resistor, p(4, 0), 0),
-                part(3, Resistor, p(8, 0), 0),
+                part(2, Resistor, p(8, 0), 0),
+                part(3, Resistor, p(16, 0), 0),
             ]),
         ),
         (
             "corner",
             drawing(vec![
                 part(1, Resistor, p(0, 0), 0),
-                part(2, Capacitor, p(2, 2), 1),
+                part(2, Capacitor, p(4, 4), 1),
             ]),
         ),
         (
             "base",
             drawing(vec![
-                part(1, Resistor, p(-4, 0), 0),
+                part(1, Resistor, p(-8, 0), 0),
                 part(2, NpnBjt, p(0, 0), 0),
             ]),
         ),
         (
             "ground",
             drawing(vec![
-                part(1, Capacitor, p(0, -2), 1),
+                part(1, Capacitor, p(0, -4), 1),
                 part(2, Ground, p(0, 0), 0),
             ]),
         ),

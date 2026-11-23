@@ -1,12 +1,12 @@
 //! Keyboard bindings of the library window and the part properties dialog.
 //!
-//! In the kit's dialogs Enter confirms the dialog whatever has the focus.
+//! In a dialog Enter confirms the dialog whatever has the focus.
 //! These bindings leave it to the focused control instead: a dialog button
 //! (see [`pressable`]) or the category tree, whose own keys are bound here
 //! as actions.
 
 use gpui_kit::component::button::Button;
-use gpui_kit::{App, FocusHandle, Global, InteractiveElement as _, KeyBinding, NoAction, Window};
+use gpui_kit::{App, Global, InteractiveElement as _, KeyBinding, NoAction};
 
 /// Key context of a dialog button that Enter presses, as Space does. The
 /// same context as the application shell's, so the two bindings agree.
@@ -36,15 +36,6 @@ gpui_kit::actions!(
 /// the dialog it sits in.
 pub(crate) fn pressable(button: Button) -> Button {
     button.key_context(PRESSABLE_CONTEXT)
-}
-
-/// Whether the keyboard is on the kit's close button of a dialog whose
-/// content tracks `content`: a tab stop outside the content. Enter that no
-/// control took closes the dialog there, as the button does. A click on
-/// the dialog's title or margins leaves the focus on the dialog itself,
-/// which is no tab stop, so Enter still confirms after one.
-pub(crate) fn on_close_button(content: &FocusHandle, window: &Window, cx: &App) -> bool {
-    !content.contains_focused(window, cx) && window.focused(cx).is_some_and(|focus| focus.tab_stop)
 }
 
 /// Marks the bindings as installed in this application.

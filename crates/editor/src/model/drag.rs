@@ -190,11 +190,26 @@ fn bridge_route(bridge: PinBridge, delta: Point, s: &Schematic) -> Vec<Point> {
 
 /// How far, in grid units, a detour may run outside the box spanned by the
 /// two pins it joins.
-const DETOUR_MARGIN: i32 = 4;
+const DETOUR_MARGIN: i32 = 8;
+
+/// Least distance, in grid units, between a detour's middle leg and the
+/// rows (or columns) of the two pins it joins, unless it runs along one of
+/// them: one schema-2 unit, so a detour keeps as clear of the parts as it
+/// did before the finer grid (D22).
+const DETOUR_CLEARANCE: i32 = 2;
+
+/// Whether a detour's middle leg at `line` keeps [`DETOUR_CLEARANCE`] from
+/// the ends' coordinates `a` and `b`, or runs along one of them.
+fn keeps_clear(line: i32, a: i32, b: i32) -> bool {
+    line == a
+        || line == b
+        || ((line - a).abs() >= DETOUR_CLEARANCE && (line - b).abs() >= DETOUR_CLEARANCE)
+}
 
 /// Orthogonal routes from `a` to `b` with at most two bends: each runs from
 /// `a` to a horizontal or vertical line, along it, then to `b`, with the
-/// line at most [`DETOUR_MARGIN`] outside the box spanned by `a` and `b`.
+/// line at most [`DETOUR_MARGIN`] outside the box spanned by `a` and `b`
+/// and [`DETOUR_CLEARANCE`] from the ends' own rows and columns.
 /// Shortest first, then with fewer bends, then with the line nearest the
 /// middle. Routes doubling back on themselves are left out.
 fn detours(a: Point, b: Point) -> Vec<Vec<Point>> {
@@ -215,10 +230,16 @@ fn detours(a: Point, b: Point) -> Vec<Vec<Point>> {
         routes.push(((length, bends, off_middle), points));
     };
     for y in a.y.min(b.y) - DETOUR_MARGIN..=a.y.max(b.y) + DETOUR_MARGIN {
+        if !keeps_clear(y, a.y, b.y) {
+            continue;
+        }
         let points = vec![a, Point::new(a.x, y), Point::new(b.x, y), b];
         push(points, (2 * y - a.y - b.y).abs());
     }
     for x in a.x.min(b.x) - DETOUR_MARGIN..=a.x.max(b.x) + DETOUR_MARGIN {
+        if !keeps_clear(x, a.x, b.x) {
+            continue;
+        }
         let points = vec![a, Point::new(x, a.y), Point::new(x, b.y), b];
         push(points, (2 * x - a.x - b.x).abs());
     }
@@ -562,7 +583,8 @@ fn jog(a: Point, b: Point, prev: Point, p: Point, prev_moved: bool) -> Vec<Point
 
 #[cfg(test)]
 mod tests {
-    use super::{MovePlan, split_points, stretch};
+    use super::{MovePlan, detours, split_points, stretch};
+    use crate::model::routing::Axis;
     use crate::model::selection::{ObjectRef, Selection};
     use std::collections::BTreeSet;
     use xsim_project::{
@@ -602,11 +624,11 @@ mod tests {
         }
     }
 
-    /// R1 at the origin wired to R2 at (8, 0): pins (2,0) and (6,0).
+    /// R1 at the origin wired to R2 at (16, 0): pins (4,0) and (12,0).
     fn two_resistors() -> Schematic {
         Schematic {
-            components: vec![resistor(1, p(0, 0)), resistor(2, p(8, 0))],
-            wires: vec![wire(3, &[p(2, 0), p(6, 0)])],
+            components: vec![resistor(1, p(0, 0)), resistor(2, p(16, 0))],
+            wires: vec![wire(3, &[p(4, 0), p(12, 0)])],
             next_id: 4,
             ..Schematic::default()
         }
@@ -616,22 +638,65 @@ mod tests {
         objects.iter().copied().collect()
     }
 
+    /// D22 doubled the drawing area to ±2·10⁸ grid units. A selection
+    /// spanning all of it turns, mirrors and moves across it without
+    /// overflowing, and the wire joining its parts keeps them on one net.
+    #[test]
+    fn edits_across_the_whole_drawing_area_do_not_overflow() {
+        use crate::model::transform::{Mirror, mirror_selection, rotate_selection};
+        const E: i32 = 200_000_000;
+        let mut s = Schematic {
+            components: vec![resistor(1, p(-E + 4, -E)), resistor(2, p(E - 4, E))],
+            // From R1's right pin (−E + 8, −E) to R2's left pin (E − 8, E).
+            wires: vec![wire(3, &[p(-E + 8, -E), p(E - 8, -E), p(E - 8, E)])],
+            next_id: 4,
+            ..Schematic::default()
+        };
+        let joined = |s: &Schematic| {
+            let c = connectivity(s);
+            c.nets.iter().any(|n| {
+                n.pins.iter().any(|&(id, _)| id == 1) && n.pins.iter().any(|&(id, _)| id == 2)
+            })
+        };
+        assert!(joined(&s));
+        let all = select(&[
+            ObjectRef::Component(1),
+            ObjectRef::Component(2),
+            ObjectRef::Wire(3),
+        ]);
+        assert!(rotate_selection(&mut s, &all));
+        assert!(mirror_selection(&mut s, &all, Mirror::Horizontal));
+        assert!(mirror_selection(&mut s, &all, Mirror::Vertical));
+        assert!(joined(&s), "turned and mirrored: {:?}", s.wires);
+        for c in &s.components {
+            let (x, y) = (c.position.x.unsigned_abs(), c.position.y.unsigned_abs());
+            assert!(x <= E as u32 && y <= E as u32, "{:?}", c.position);
+        }
+        // R1 alone, to the next corner: the wire stretches after it.
+        let r1 = s.components[0].position;
+        let delta = p(-2 * r1.x, 0);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(delta);
+        assert_eq!(moved.components[0].position, p(-r1.x, r1.y));
+        assert!(joined(&moved), "moved: {:?}", moved.wires);
+        assert_orthogonal(&moved);
+    }
+
     #[test]
     fn moving_along_a_wire_just_lengthens_it() {
         let s = two_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-3, 0));
-        assert_eq!(moved.wires[0].points, vec![p(-1, 0), p(6, 0)]);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-6, 0));
+        assert_eq!(moved.wires[0].points, vec![p(-2, 0), p(12, 0)]);
     }
 
     #[test]
     fn moving_sideways_inserts_an_orthogonal_jog() {
         let s = two_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(0, -2));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(0, -4));
         assert_orthogonal(&moved);
         let w = &moved.wires[0];
-        assert_eq!(w.points.first(), Some(&p(2, -2)));
-        assert_eq!(w.points.last(), Some(&p(6, 0)));
-        assert_eq!(w.points, vec![p(2, -2), p(4, -2), p(4, 0), p(6, 0)]);
+        assert_eq!(w.points.first(), Some(&p(4, -4)));
+        assert_eq!(w.points.last(), Some(&p(12, 0)));
+        assert_eq!(w.points, vec![p(4, -4), p(8, -4), p(8, 0), p(12, 0)]);
     }
 
     #[test]
@@ -642,38 +707,38 @@ mod tests {
                 rotation: 1,
                 ..Orientation::default()
             },
-            ..resistor(2, p(6, 6))
+            ..resistor(2, p(12, 12))
         };
-        s.wires[0] = wire(3, &[p(2, 0), p(6, 0), p(6, 4)]);
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(1, -2));
-        assert_eq!(moved.wires[0].points, vec![p(3, -2), p(6, -2), p(6, 4)]);
+        s.wires[0] = wire(3, &[p(4, 0), p(12, 0), p(12, 8)]);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(2, -4));
+        assert_eq!(moved.wires[0].points, vec![p(6, -4), p(12, -4), p(12, 8)]);
     }
 
     #[test]
     fn moving_everything_translates_wires() {
         let s = two_resistors();
         let all = Selection::all(&s);
-        let moved = MovePlan::new(&s, &all).apply(p(3, 5));
-        assert_eq!(moved.wires[0].points, vec![p(5, 5), p(9, 5)]);
-        assert_eq!(moved.components[1].position, p(11, 5));
+        let moved = MovePlan::new(&s, &all).apply(p(6, 10));
+        assert_eq!(moved.wires[0].points, vec![p(10, 10), p(18, 10)]);
+        assert_eq!(moved.components[1].position, p(22, 10));
     }
 
     #[test]
     fn an_unselected_wire_between_two_moved_parts_translates() {
         let s = two_resistors();
         let both = select(&[ObjectRef::Component(1), ObjectRef::Component(2)]);
-        let moved = MovePlan::new(&s, &both).apply(p(0, 3));
-        assert_eq!(moved.wires[0].points, vec![p(2, 3), p(6, 3)]);
+        let moved = MovePlan::new(&s, &both).apply(p(0, 6));
+        assert_eq!(moved.wires[0].points, vec![p(4, 6), p(12, 6)]);
     }
 
     #[test]
     fn a_selected_wire_keeps_ends_on_fixed_pins() {
         let s = two_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Wire(3)])).apply(p(0, 2));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Wire(3)])).apply(p(0, 4));
         assert_orthogonal(&moved);
         assert_eq!(
             moved.wires[0].points,
-            vec![p(2, 0), p(2, 2), p(6, 2), p(6, 0)]
+            vec![p(4, 0), p(4, 4), p(12, 4), p(12, 0)]
         );
     }
 
@@ -681,11 +746,11 @@ mod tests {
     fn a_pin_on_a_wire_interior_splits_the_wire_so_both_halves_follow() {
         let s = Schematic {
             components: vec![resistor(1, p(0, 0))],
-            wires: vec![wire(2, &[p(2, -4), p(2, 4)])],
+            wires: vec![wire(2, &[p(4, -8), p(4, 8)])],
             next_id: 3,
             ..Schematic::default()
         };
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-2, 0));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-4, 0));
         assert_orthogonal(&moved);
         let ends: BTreeSet<Point> = moved
             .wires
@@ -693,24 +758,24 @@ mod tests {
             .flat_map(|w| [w.points[0], w.points[w.points.len() - 1]])
             .collect();
         assert!(ends.contains(&p(0, 0)), "both halves end at the moved pin");
-        assert!(ends.contains(&p(2, -4)) && ends.contains(&p(2, 4)));
+        assert!(ends.contains(&p(4, -8)) && ends.contains(&p(4, 8)));
     }
 
     #[test]
     fn labels_move_with_the_selection_and_pull_their_wire() {
         let s = Schematic {
-            wires: vec![wire(1, &[p(0, 0), p(4, 0)])],
+            wires: vec![wire(1, &[p(0, 0), p(8, 0)])],
             labels: vec![NetLabel {
                 id: 2,
                 name: "out".into(),
-                position: p(4, 0),
+                position: p(8, 0),
             }],
             next_id: 3,
             ..Schematic::default()
         };
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Label(2)])).apply(p(2, 0));
-        assert_eq!(moved.labels[0].position, p(6, 0));
-        assert_eq!(moved.wires[0].points, vec![p(0, 0), p(6, 0)]);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Label(2)])).apply(p(4, 0));
+        assert_eq!(moved.labels[0].position, p(12, 0));
+        assert_eq!(moved.wires[0].points, vec![p(0, 0), p(12, 0)]);
     }
 
     #[test]
@@ -724,36 +789,36 @@ mod tests {
     fn degenerate_wires_from_a_file_do_not_break_a_move() {
         let mut s = two_resistors();
         s.wires.push(wire(9, &[]));
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(0, 1));
-        assert_eq!(moved.components[0].position, p(0, 1));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(0, 2));
+        assert_eq!(moved.components[0].position, p(0, 2));
     }
 
     #[test]
     fn diagonal_segments_just_follow_their_end() {
-        let out = stretch(&[p(0, 0), p(4, 4)], &[true, false], p(1, 0), |_| false);
-        assert_eq!(out, vec![p(1, 0), p(4, 4)]);
+        let out = stretch(&[p(0, 0), p(8, 8)], &[true, false], p(2, 0), |_| false);
+        assert_eq!(out, vec![p(2, 0), p(8, 8)]);
     }
 
     #[test]
     fn splitting_cuts_at_interior_vertices_and_segment_points() {
-        let at: BTreeSet<Point> = [p(2, 0), p(4, 0), p(4, 3)].into_iter().collect();
-        let pieces = split_points(&[p(0, 0), p(4, 0), p(4, 6)], &at);
+        let at: BTreeSet<Point> = [p(4, 0), p(8, 0), p(8, 6)].into_iter().collect();
+        let pieces = split_points(&[p(0, 0), p(8, 0), p(8, 12)], &at);
         assert_eq!(
             pieces,
             vec![
-                vec![p(0, 0), p(2, 0)],
-                vec![p(2, 0), p(4, 0)],
-                vec![p(4, 0), p(4, 3)],
-                vec![p(4, 3), p(4, 6)],
+                vec![p(0, 0), p(4, 0)],
+                vec![p(4, 0), p(8, 0)],
+                vec![p(8, 0), p(8, 6)],
+                vec![p(8, 6), p(8, 12)],
             ]
         );
     }
 
-    /// R1 at the origin and R2 at (4, 0), touching pin to pin at (2, 0)
+    /// R1 at the origin and R2 at (8, 0), touching pin to pin at (4, 0)
     /// with no wire.
     fn touching_resistors() -> Schematic {
         Schematic {
-            components: vec![resistor(1, p(0, 0)), resistor(2, p(4, 0))],
+            components: vec![resistor(1, p(0, 0)), resistor(2, p(8, 0))],
             next_id: 3,
             ..Schematic::default()
         }
@@ -772,9 +837,9 @@ mod tests {
     fn touching_pins_get_a_wire_when_one_part_moves_along_their_axis() {
         let s = touching_resistors();
         assert!(connected(&s, (1, 1), (2, 0)), "touching pins connect");
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(3, 0));
-        assert_eq!(moved.components[1].position, p(7, 0));
-        assert_eq!(points_of(&moved), vec![vec![p(2, 0), p(5, 0)]]);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(6, 0));
+        assert_eq!(moved.components[1].position, p(14, 0));
+        assert_eq!(points_of(&moved), vec![vec![p(4, 0), p(10, 0)]]);
         assert!(connected(&moved, (1, 1), (2, 0)));
         assert!(!connected(&moved, (1, 0), (2, 1)), "R2 is not shorted");
     }
@@ -782,22 +847,22 @@ mod tests {
     #[test]
     fn a_part_moved_down_off_a_touching_pin_hangs_on_a_straight_wire() {
         let s = touching_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, 3));
-        assert_eq!(points_of(&moved), vec![vec![p(2, 0), p(2, 3)]]);
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, 6));
+        assert_eq!(points_of(&moved), vec![vec![p(4, 0), p(4, 6)]]);
         assert!(connected(&moved, (1, 1), (2, 0)));
     }
 
     #[test]
     fn a_diagonal_move_routes_a_z_that_leaves_both_pins_along_their_axis() {
         let s = touching_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(4, 3));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(8, 6));
         assert_eq!(
             points_of(&moved),
-            vec![vec![p(2, 0), p(4, 0), p(4, 3), p(6, 3)]]
+            vec![vec![p(4, 0), p(8, 0), p(8, 6), p(12, 6)]]
         );
         assert_orthogonal(&moved);
         assert!(connected(&moved, (1, 1), (2, 0)));
-        let one_unit = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-1, 3));
+        let one_unit = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-2, 6));
         assert_orthogonal(&one_unit);
         assert!(
             connected(&one_unit, (1, 1), (2, 0)),
@@ -808,12 +873,12 @@ mod tests {
     #[test]
     fn a_part_touching_two_others_keeps_both_connections() {
         let mut s = touching_resistors();
-        s.components.push(resistor(3, p(8, 0)));
+        s.components.push(resistor(3, p(16, 0)));
         s.next_id = 4;
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, -2));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, -4));
         assert_eq!(
             points_of(&moved),
-            vec![vec![p(2, 0), p(2, -2)], vec![p(6, 0), p(6, -2)]]
+            vec![vec![p(4, 0), p(4, -4)], vec![p(12, 0), p(12, -4)]]
         );
         assert!(connected(&moved, (1, 1), (2, 0)));
         assert!(connected(&moved, (2, 1), (3, 0)));
@@ -823,18 +888,18 @@ mod tests {
     #[test]
     fn a_selection_bridges_only_to_partners_left_behind() {
         let mut s = touching_resistors();
-        s.components.push(resistor(3, p(8, 0)));
+        s.components.push(resistor(3, p(16, 0)));
         s.next_id = 4;
         let both = select(&[ObjectRef::Component(1), ObjectRef::Component(2)]);
-        let moved = MovePlan::new(&s, &both).apply(p(0, 2));
+        let moved = MovePlan::new(&s, &both).apply(p(0, 4));
         assert_eq!(
             points_of(&moved),
-            vec![vec![p(6, 0), p(6, 2)]],
+            vec![vec![p(12, 0), p(12, 4)]],
             "R1–R2 move together; only R3 needs a wire"
         );
         assert!(connected(&moved, (1, 1), (2, 0)));
         assert!(connected(&moved, (2, 1), (3, 0)));
-        let all = MovePlan::new(&s, &Selection::all(&s)).apply(p(0, 2));
+        let all = MovePlan::new(&s, &Selection::all(&s)).apply(p(0, 4));
         assert!(all.wires.is_empty(), "nothing is left behind");
     }
 
@@ -844,16 +909,16 @@ mod tests {
         s.components.push(Component {
             id: 3,
             name: "GND1".into(),
-            position: p(2, 0),
+            position: p(4, 0),
             orientation: Orientation::default(),
             part: Part::Ground,
         });
         s.next_id = 4;
         let both = select(&[ObjectRef::Component(1), ObjectRef::Component(2)]);
-        let moved = MovePlan::new(&s, &both).apply(p(0, -3));
+        let moved = MovePlan::new(&s, &both).apply(p(0, -6));
         assert_eq!(
             points_of(&moved),
-            vec![vec![p(2, 0), p(2, -3)]],
+            vec![vec![p(4, 0), p(4, -6)]],
             "the ground pin leaves vertically"
         );
         assert!(connected(&moved, (1, 1), (3, 0)));
@@ -863,14 +928,14 @@ mod tests {
     #[test]
     fn a_wire_ending_on_touching_pins_stays_with_the_pin_that_stays() {
         let mut s = touching_resistors();
-        s.wires.push(wire(3, &[p(2, 0), p(2, 5)]));
+        s.wires.push(wire(3, &[p(4, 0), p(4, 10)]));
         s.next_id = 4;
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-3, 0));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(1)])).apply(p(-6, 0));
         assert!(
             moved
                 .wires
                 .iter()
-                .any(|w| w.points == vec![p(2, 0), p(2, 5)]),
+                .any(|w| w.points == vec![p(4, 0), p(4, 10)]),
             "the wire did not move: {:?}",
             moved.wires
         );
@@ -878,7 +943,7 @@ mod tests {
             moved
                 .wires
                 .iter()
-                .any(|w| w.points == vec![p(2, 0), p(-1, 0)]),
+                .any(|w| w.points == vec![p(4, 0), p(-2, 0)]),
             "a new wire reaches R1: {:?}",
             moved.wires
         );
@@ -896,15 +961,15 @@ mod tests {
     fn moving_back_onto_the_partner_removes_the_inserted_wire() {
         let s = touching_resistors();
         let r1 = select(&[ObjectRef::Component(1)]);
-        let once = MovePlan::new(&s, &r1).apply(p(-1, 0));
-        assert_eq!(points_of(&once), vec![vec![p(2, 0), p(1, 0)]]);
-        let twice = MovePlan::new(&once, &r1).apply(p(-1, 0));
+        let once = MovePlan::new(&s, &r1).apply(p(-2, 0));
+        assert_eq!(points_of(&once), vec![vec![p(4, 0), p(2, 0)]]);
+        let twice = MovePlan::new(&once, &r1).apply(p(-2, 0));
         assert_eq!(
             points_of(&twice),
-            vec![vec![p(2, 0), p(0, 0)]],
+            vec![vec![p(4, 0), p(0, 0)]],
             "the inserted wire stretches like any other"
         );
-        let back = MovePlan::new(&twice, &r1).apply(p(2, 0));
+        let back = MovePlan::new(&twice, &r1).apply(p(4, 0));
         assert!(back.wires.is_empty(), "{:?}", back.wires);
         assert_eq!(back.components, s.components);
         assert!(connected(&back, (1, 1), (2, 0)));
@@ -916,7 +981,7 @@ mod tests {
     fn a_part_dragged_past_its_partner_shorts_neither() {
         let s = touching_resistors();
         let r2 = select(&[ObjectRef::Component(2)]);
-        for d in [p(-8, 3), p(-8, 0), p(-9, -1), p(6, 0), p(0, 1)] {
+        for d in [p(-16, 6), p(-16, 0), p(-18, -2), p(12, 0), p(0, 2)] {
             let moved = MovePlan::new(&s, &r2).apply(d);
             assert_orthogonal(&moved);
             assert!(
@@ -927,18 +992,51 @@ mod tests {
             assert!(!connected(&moved, (1, 0), (1, 1)), "{d:?}: R1 shorted");
             assert!(!connected(&moved, (2, 0), (2, 1)), "{d:?}: R2 shorted");
         }
-        let past = MovePlan::new(&s, &r2).apply(p(-8, 0));
+        let past = MovePlan::new(&s, &r2).apply(p(-16, 0));
         assert_eq!(
             points_of(&past),
-            vec![vec![p(2, 0), p(2, -1), p(-6, -1), p(-6, 0)]],
+            vec![vec![p(4, 0), p(4, -2), p(-12, -2), p(-12, 0)]],
             "the shortest detour clear of both parts"
         );
-        let along = MovePlan::new(&s, &r2).apply(p(3, 0));
+        let along = MovePlan::new(&s, &r2).apply(p(6, 0));
         assert_eq!(
             points_of(&along),
-            vec![vec![p(2, 0), p(5, 0)]],
+            vec![vec![p(4, 0), p(10, 0)]],
             "a clear route is kept"
         );
+    }
+
+    /// D22: detours keep one schema-2 unit (two grid units) clear of the
+    /// rows and columns of the pins they join, as they did on the coarser
+    /// grid, unless they run along them.
+    #[test]
+    fn detours_keep_as_clear_of_the_pins_as_on_the_coarser_grid() {
+        for (a, b) in [
+            (p(4, 0), p(-12, 0)),
+            (p(0, 0), p(9, 5)),
+            (p(3, -2), p(3, 7)),
+        ] {
+            let routes = detours(a, b);
+            assert!(!routes.is_empty(), "{a:?}–{b:?}");
+            for route in routes {
+                let lines: Vec<(i32, i32, i32)> = route
+                    .windows(2)
+                    .filter(|g| g[0] != a && g[1] != b)
+                    .filter_map(|g| match Axis::of(g[0], g[1]) {
+                        Some(Axis::Horizontal) => Some((g[0].y, a.y, b.y)),
+                        Some(Axis::Vertical) => Some((g[0].x, a.x, b.x)),
+                        None => None,
+                    })
+                    .collect();
+                for (line, from, to) in lines {
+                    let clear = |end: i32| line == end || (line - end).abs() >= 2;
+                    assert!(
+                        line == from || line == to || (clear(from) && clear(to)),
+                        "{a:?}–{b:?}: {route:?} hugs a pin"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -946,14 +1044,14 @@ mod tests {
         let mut s = touching_resistors();
         // A labelled wire under the parts ending right below the touching
         // point, where a straight wire down would join it (a T-junction).
-        s.wires.push(wire(3, &[p(-4, 2), p(2, 2)]));
+        s.wires.push(wire(3, &[p(-8, 4), p(4, 4)]));
         s.labels.push(NetLabel {
             id: 4,
             name: "bus".into(),
-            position: p(-4, 2),
+            position: p(-8, 4),
         });
         s.next_id = 5;
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, 4));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(0, 8));
         assert_orthogonal(&moved);
         assert!(connected(&moved, (1, 1), (2, 0)));
         let c = connectivity(&moved);
@@ -961,7 +1059,7 @@ mod tests {
             !moved
                 .wires
                 .iter()
-                .any(|w| w.id != 3 && w.points.contains(&p(2, 2))),
+                .any(|w| w.id != 3 && w.points.contains(&p(4, 4))),
             "nothing ends on the bus: {:?}",
             moved.wires
         );
@@ -981,13 +1079,13 @@ mod tests {
         s.labels.push(NetLabel {
             id: 3,
             name: "mid".into(),
-            position: p(2, 0),
+            position: p(4, 0),
         });
         s.next_id = 4;
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(2, 3));
-        assert_eq!(moved.labels[0].position, p(2, 0), "the label stays");
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(4, 6));
+        assert_eq!(moved.labels[0].position, p(4, 0), "the label stays");
         let c = connectivity(&moved);
-        let mid = c.net_at(p(2, 0));
+        let mid = c.net_at(p(4, 0));
         assert_eq!(c.net_of_pin(1, 1), mid);
         assert_eq!(c.net_of_pin(2, 0), mid);
     }
@@ -995,49 +1093,49 @@ mod tests {
     #[test]
     fn a_wire_passing_through_the_touching_point_stays_whole() {
         let mut s = touching_resistors();
-        s.wires.push(wire(3, &[p(2, -4), p(2, 4)]));
+        s.wires.push(wire(3, &[p(4, -8), p(4, 8)]));
         s.next_id = 4;
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(3, 0));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(6, 0));
         assert!(
             moved
                 .wires
                 .iter()
-                .any(|w| w.points == vec![p(2, -4), p(2, 4)]),
+                .any(|w| w.points == vec![p(4, -8), p(4, 8)]),
             "the wire is not split or pulled: {:?}",
             moved.wires
         );
         assert!(connected(&moved, (1, 1), (2, 0)));
         let c = connectivity(&moved);
-        assert_eq!(c.net_at(p(2, -4)), c.net_of_pin(2, 0));
+        assert_eq!(c.net_at(p(4, -8)), c.net_of_pin(2, 0));
     }
 
     #[test]
     fn a_selected_wire_ending_on_the_touching_point_moves_with_the_part() {
         let mut s = touching_resistors();
-        s.wires.push(wire(3, &[p(2, 0), p(2, 4)]));
+        s.wires.push(wire(3, &[p(4, 0), p(4, 8)]));
         s.next_id = 4;
         let selection = select(&[ObjectRef::Component(2), ObjectRef::Wire(3)]);
-        let moved = MovePlan::new(&s, &selection).apply(p(3, 0));
+        let moved = MovePlan::new(&s, &selection).apply(p(6, 0));
         assert!(
             moved
                 .wires
                 .iter()
-                .any(|w| w.points == vec![p(5, 0), p(5, 4)]),
+                .any(|w| w.points == vec![p(10, 0), p(10, 8)]),
             "{:?}",
             moved.wires
         );
         assert!(connected(&moved, (1, 1), (2, 0)));
         let c = connectivity(&moved);
-        assert_eq!(c.net_at(p(5, 4)), c.net_of_pin(1, 1));
+        assert_eq!(c.net_at(p(10, 8)), c.net_of_pin(1, 1));
     }
 
     #[test]
     fn a_wire_end_on_a_pin_still_just_stretches() {
         let s = two_resistors();
-        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(2, 0));
+        let moved = MovePlan::new(&s, &select(&[ObjectRef::Component(2)])).apply(p(4, 0));
         assert_eq!(
             points_of(&moved),
-            vec![vec![p(2, 0), p(8, 0)]],
+            vec![vec![p(4, 0), p(16, 0)]],
             "no extra wire"
         );
     }

@@ -3,12 +3,13 @@
 //! recovery), the diagnostics dock, the plot's side panels, menus and
 //! popovers.
 //!
-//! The kit's dialogs slide and fade in and out unless reduced motion is on,
-//! and the part properties and component library dialogs are built by the
-//! editor. So reduced motion is set once for the whole application, after
-//! the kit has read the system's preference, which it then leaves alone.
-//! The dock and the plot's side panels have no motion of their own, and the
-//! kit's menus and popovers do not animate.
+//! The dialogs are windows of their own (D22, `xsim_editor::dialog_window`),
+//! which draw no transition. The kit's components animate unless reduced
+//! motion is on, so it is set once for the whole application, after the
+//! kit has read the system's preference, which it then leaves alone. The
+//! dock and the plot's side panels have no motion of their own, and the
+//! kit's menus and popovers do not animate. (The operating system may still
+//! animate a window as it appears.)
 //!
 //! Reduced motion also settles the kit's other transitions on their first
 //! frame. Toasts appear and leave at once but keep their lifecycle and

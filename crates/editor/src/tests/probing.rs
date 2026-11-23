@@ -94,10 +94,10 @@ fn voltage(node: &str) -> ProbeRequest {
 #[gpui_kit::test]
 fn clicking_a_wire_or_pin_probes_its_voltage(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    h.click(-4, -4);
-    h.click(2, -4);
+    h.click(-8, -8);
+    h.click(4, -8);
     assert_eq!(probes(&mut h), vec![voltage("in"), voltage("out")]);
-    h.click(-2, 4);
+    h.click(-4, 8);
     assert!(probes(&mut h).is_empty(), "ground has no voltage trace");
     h.close();
 }
@@ -105,7 +105,7 @@ fn clicking_a_wire_or_pin_probes_its_voltage(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn dragging_the_probe_between_nets_measures_the_difference(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    h.drag((-4, -4), (4, -4));
+    h.drag((-8, -8), (8, -8));
     assert_eq!(
         probes(&mut h),
         vec![ProbeRequest::Differential {
@@ -113,13 +113,13 @@ fn dragging_the_probe_between_nets_measures_the_difference(cx: &mut TestAppConte
             minus: "out".into()
         }]
     );
-    h.drag((-4, -4), (-6, -3));
+    h.drag((-8, -8), (-12, -6));
     assert_eq!(
         probes(&mut h),
         vec![voltage("in")],
         "same net: plain voltage"
     );
-    h.drag((4, -4), (-2, 4));
+    h.drag((8, -8), (-4, 8));
     assert_eq!(
         probes(&mut h),
         vec![voltage("out")],
@@ -132,7 +132,7 @@ fn dragging_the_probe_between_nets_measures_the_difference(cx: &mut TestAppConte
 #[gpui_kit::test]
 fn holding_the_probe_shows_the_glyph_at_the_cursor(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    let (a, b) = (h.at(-4, -4), h.at(0, 0));
+    let (a, b) = (h.at(-8, -8), h.at(0, 0));
     h.cx.simulate_mouse_move(a, None, gpui_kit::Modifiers::default());
     h.cx.simulate_mouse_down(
         a,
@@ -159,7 +159,7 @@ fn holding_the_probe_shows_the_glyph_at_the_cursor(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn clicking_a_part_selects_it_and_probes_its_current(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    h.click(0, -4);
+    h.click(0, -8);
     assert_eq!(
         probes(&mut h),
         vec![ProbeRequest::Current {
@@ -167,11 +167,11 @@ fn clicking_a_part_selects_it_and_probes_its_current(cx: &mut TestAppContext) {
         }]
     );
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(2)]);
-    h.drag((0, -4), (0, -6));
+    h.drag((0, -8), (0, -12));
     assert!(probes(&mut h).is_empty(), "dragging a part moves it");
     assert_eq!(
         h.schematic().components[1].position,
-        xsim_project::Point::new(0, -6)
+        xsim_project::Point::new(0, -12)
     );
     h.close();
 }
@@ -179,7 +179,7 @@ fn clicking_a_part_selects_it_and_probes_its_current(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn hovering_a_wire_highlights_its_net(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    let p = h.at(-4, -4);
+    let p = h.at(-8, -8);
     h.hover(p);
     let net = h
         .read(|e| e.hover.net.clone())
@@ -192,7 +192,7 @@ fn hovering_a_wire_highlights_its_net(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn resting_on_a_part_shows_rms_and_average_power(cx: &mut TestAppContext) {
     let mut h = probed(cx);
-    let p = h.at(0, -4);
+    let p = h.at(0, -8);
     h.hover(p);
     assert!(
         h.read(|e| e.hover.card.is_none()),
@@ -216,7 +216,7 @@ fn resting_on_a_part_shows_rms_and_average_power(cx: &mut TestAppContext) {
     assert!(close(m.voltage, v_rms), "{:?}", m.voltage);
     assert!(close(m.current, v_rms / 1e3), "{:?}", m.current);
     assert!(close(m.power, 0.385e-3), "{:?}", m.power);
-    let p = h.at(0, 4);
+    let p = h.at(0, 8);
     h.hover(p);
     h.wait(HOVER_DELAY);
     assert!(h.control("hover-card").is_none(), "ground has no card");
@@ -228,7 +228,7 @@ fn sweeps_show_the_card_without_values(cx: &mut TestAppContext) {
     let mut h = open(cx, rc_low_pass());
     let context = probe_context(&rc_low_pass(), AnalysisKind::DcSweep);
     h.update(|e, cx| e.set_probe_context(Some(context), cx));
-    let p = h.at(0, -4);
+    let p = h.at(0, -8);
     h.hover(p);
     h.wait(HOVER_DELAY);
     let card = h.read(|e| e.hover.card.clone()).expect("card shown");
@@ -240,12 +240,12 @@ fn sweeps_show_the_card_without_values(cx: &mut TestAppContext) {
 fn read_only_editors_still_probe(cx: &mut TestAppContext) {
     let mut h = probed(cx);
     h.update(|e, cx| e.set_read_only(true, cx));
-    h.click(2, -4);
-    h.drag((0, -4), (0, -6));
+    h.click(4, -8);
+    h.drag((0, -8), (0, -12));
     assert!(probes(&mut h).contains(&voltage("out")));
     assert_eq!(h.schematic(), rc_low_pass());
     h.update(|e, cx| e.set_probe_context(None, cx));
-    h.click(2, -4);
+    h.click(4, -8);
     assert!(probes(&mut h).is_empty(), "no probing without a result");
     h.close();
 }
@@ -281,8 +281,8 @@ fn probes_and_the_hover_card_agree_with_a_real_simulation(cx: &mut TestAppContex
     let mut h = open(cx, rc_low_pass());
     h.update(|e, cx| e.set_probe_context(Some(context.clone()), cx));
     h.events();
-    h.click(2, -4);
-    h.click(0, -4);
+    h.click(4, -8);
+    h.click(0, -8);
     let requests = probes(&mut h);
     assert_eq!(
         requests,

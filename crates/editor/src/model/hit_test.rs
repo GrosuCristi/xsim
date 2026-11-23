@@ -40,8 +40,8 @@ impl Hit {
 /// Clickable body of a part: its bounds pulled away from the pins, but at
 /// least `MIN_HALF` thick.
 pub fn body_rect(component: &Component) -> Rect {
-    const INSET: f32 = 0.5;
-    const MIN_HALF: f32 = 0.6;
+    const INSET: f32 = 1.0;
+    const MIN_HALF: f32 = 1.2;
     let (a, b) = component.bounds();
     let r = Rect::from_corners(Vec2::from_grid(a), Vec2::from_grid(b)).inflate(-INSET, -INSET);
     let c = r.center();
@@ -181,12 +181,12 @@ mod tests {
             }],
             wires: vec![Wire {
                 id: 2,
-                points: vec![Point::new(2, 0), Point::new(8, 0), Point::new(8, 6)],
+                points: vec![Point::new(4, 0), Point::new(16, 0), Point::new(16, 12)],
             }],
             labels: vec![NetLabel {
                 id: 3,
                 name: "out".into(),
-                position: Point::new(8, 6),
+                position: Point::new(16, 12),
             }],
             next_id: 4,
         }
@@ -196,39 +196,42 @@ mod tests {
     fn pins_win_over_wires_and_bodies() {
         let s = schematic();
         assert_eq!(
-            hit_test(&s, Vec2::new(2.1, 0.1), 0.4),
+            hit_test(&s, Vec2::new(4.2, 0.2), 0.8),
             Some(Hit::Pin {
                 component: 1,
                 pin: 1,
-                point: Point::new(2, 0)
+                point: Point::new(4, 0)
             })
         );
         assert_eq!(
-            hit_test(&s, Vec2::new(0.3, 0.2), 0.4),
+            hit_test(&s, Vec2::new(0.6, 0.4), 0.8),
             Some(Hit::Component(1))
         );
         assert_eq!(
-            hit_test(&s, Vec2::new(5.0, 0.2), 0.4),
+            hit_test(&s, Vec2::new(10.0, 0.4), 0.8),
             Some(Hit::Wire {
                 wire: 2,
                 segment: 0
             })
         );
         assert_eq!(
-            hit_test(&s, Vec2::new(8.1, 3.0), 0.4),
+            hit_test(&s, Vec2::new(16.2, 6.0), 0.8),
             Some(Hit::Wire {
                 wire: 2,
                 segment: 1
             })
         );
-        assert_eq!(hit_test(&s, Vec2::new(9.5, 6.0), 0.4), Some(Hit::Label(3)));
-        assert_eq!(hit_test(&s, Vec2::new(4.0, 4.0), 0.4), None);
+        assert_eq!(
+            hit_test(&s, Vec2::new(19.0, 12.0), 0.8),
+            Some(Hit::Label(3))
+        );
+        assert_eq!(hit_test(&s, Vec2::new(8.0, 8.0), 0.8), None);
     }
 
     #[test]
     fn enclosing_boxes_need_whole_objects_and_crossing_boxes_any_part() {
         let s = schematic();
-        let r = Rect::from_corners(Vec2::new(-3.0, -2.0), Vec2::new(5.0, 2.0));
+        let r = Rect::from_corners(Vec2::new(-6.0, -4.0), Vec2::new(10.0, 4.0));
         assert_eq!(
             objects_in_box(&s, r, BoxMode::Enclosed),
             vec![ObjectRef::Component(1)]

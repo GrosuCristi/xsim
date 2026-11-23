@@ -7,6 +7,10 @@
 //! target schematic, or would break probe expressions (INT-4), are
 //! renumbered. A current switch pasted with its control source follows
 //! that source's new designator.
+//!
+//! Version 2 fragments hold coordinates in the grid units of schema 3, half
+//! the unit of version 1 (D22). A version-1 fragment, copied from an xsim
+//! still writing schema 2, is scaled on decoding so it pastes at its size.
 
 use crate::model::geometry::{Rect, Vec2};
 use crate::model::ops::translate_all;
@@ -18,7 +22,9 @@ use xsim_project::{Part, PartKind, Point, Schematic};
 /// Marker identifying xsim clipboard content.
 const FORMAT: &str = "xsim/schematic-fragment";
 /// Version of the fragment layout.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
+/// The last version with coordinates in schema-2 units.
+const SCHEMA2_UNITS: u64 = 1;
 
 /// The selected objects of `schematic` as a stand-alone schematic.
 pub fn extract(schematic: &Schematic, selection: &Selection) -> Schematic {
@@ -54,11 +60,35 @@ pub fn encode(fragment: &Schematic) -> Option<String> {
 /// Parses clipboard text; `None` for anything that is not an xsim fragment.
 pub fn decode(text: &str) -> Option<Schematic> {
     let value: Value = serde_json::from_str(text).ok()?;
-    if value.get("format")?.as_str()? != FORMAT || value.get("version")?.as_u64()? > VERSION {
+    let version = value.get("version")?.as_u64()?;
+    if value.get("format")?.as_str()? != FORMAT || version > VERSION {
         return None;
     }
-    let fragment: Schematic = serde_json::from_value(value.get("fragment")?.clone()).ok()?;
+    let mut fragment: Schematic = serde_json::from_value(value.get("fragment")?.clone()).ok()?;
+    if version <= SCHEMA2_UNITS {
+        fragment = doubled(fragment)?;
+    }
     (!fragment.is_empty()).then_some(fragment)
+}
+
+/// A fragment in schema-2 units converted to grid units: every coordinate
+/// doubled, as when a schema-2 project is opened. `None` when a coordinate
+/// would overflow (clipboard text can hold anything).
+fn doubled(mut fragment: Schematic) -> Option<Schematic> {
+    let double = |p: &mut Point| -> Option<()> {
+        *p = Point::new(p.x.checked_mul(2)?, p.y.checked_mul(2)?);
+        Some(())
+    };
+    for c in &mut fragment.components {
+        double(&mut c.position)?;
+    }
+    for p in fragment.wires.iter_mut().flat_map(|w| w.points.iter_mut()) {
+        double(p)?;
+    }
+    for l in &mut fragment.labels {
+        double(&mut l.position)?;
+    }
+    Some(fragment)
 }
 
 /// Grid point nearest the centre of everything in `fragment`.
@@ -147,7 +177,7 @@ mod tests {
                 Component {
                     id: 2,
                     name: "D7".into(),
-                    position: Point::new(0, 6),
+                    position: Point::new(0, 12),
                     orientation: Orientation::default(),
                     part: Part::Diode {
                         model: "D_SIGNAL".into(),
@@ -156,12 +186,12 @@ mod tests {
             ],
             wires: vec![Wire {
                 id: 3,
-                points: vec![Point::new(2, 0), Point::new(4, 0)],
+                points: vec![Point::new(4, 0), Point::new(8, 0)],
             }],
             labels: vec![NetLabel {
                 id: 4,
                 name: "out".into(),
-                position: Point::new(4, 0),
+                position: Point::new(8, 0),
             }],
             next_id: 5,
         }
@@ -173,6 +203,43 @@ mod tests {
         let fragment = extract(&s, &Selection::all(&s));
         let text = encode(&fragment).expect("serialisable");
         assert_eq!(decode(&text), Some(fragment));
+    }
+
+    /// D22: a fragment copied from an xsim still writing schema 2 has its
+    /// coordinates in units twice as large; it pastes at its size.
+    #[test]
+    fn version_1_fragments_are_scaled_to_the_finer_grid() {
+        let s = source();
+        let mut old = extract(&s, &Selection::all(&s));
+        for c in &mut old.components {
+            c.position = Point::new(c.position.x / 2, c.position.y / 2);
+        }
+        for p in old.wires.iter_mut().flat_map(|w| w.points.iter_mut()) {
+            *p = Point::new(p.x / 2, p.y / 2);
+        }
+        for l in &mut old.labels {
+            l.position = Point::new(l.position.x / 2, l.position.y / 2);
+        }
+        let body = serde_json::to_value(&old).expect("serialisable");
+        let text = serde_json::json!({
+            "format": "xsim/schematic-fragment",
+            "version": 1,
+            "fragment": body,
+        })
+        .to_string();
+        assert_eq!(decode(&text), Some(extract(&s, &Selection::all(&s))));
+        // A coordinate that would overflow when doubled is not a fragment.
+        old.components[0].position.x = i32::MAX;
+        let body = serde_json::to_value(&old).expect("serialisable");
+        let text = serde_json::json!({
+            "format": "xsim/schematic-fragment", "version": 1, "fragment": body,
+        })
+        .to_string();
+        assert_eq!(decode(&text), None);
+        // Fragments of this version are taken as they are.
+        let current = encode(&extract(&s, &Selection::all(&s))).expect("serialisable");
+        assert!(current.contains("\"version\":2"), "{current}");
+        assert_eq!(decode(&current), Some(extract(&s, &Selection::all(&s))));
     }
 
     #[test]
@@ -190,7 +257,7 @@ mod tests {
         let s = source();
         let fragment = extract(&s, &Selection::all(&s));
         let mut target = source();
-        let inserted = insert(&mut target, &fragment, Point::new(10, 0));
+        let inserted = insert(&mut target, &fragment, Point::new(20, 0));
         assert_eq!(inserted.len(), 4);
         let names: Vec<_> = target.components.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["R1", "D7", "R2", "D1"]);
@@ -204,7 +271,7 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), 8, "every object has a unique id");
-        assert_eq!(target.wires[1].points[0], Point::new(12, 0));
+        assert_eq!(target.wires[1].points[0], Point::new(24, 0));
         assert_eq!(target.labels[1].name, "out", "labels keep their net name");
         assert!(inserted.contains(ObjectRef::Label(target.labels[1].id)));
     }
@@ -249,7 +316,7 @@ mod tests {
         };
         let control = control.to_string();
         add(switch, Part::CurrentSwitch { control, model }, 0);
-        add(name, Part::default_for(PartKind::VoltageSource), 10);
+        add(name, Part::default_for(PartKind::VoltageSource), 20);
         s
     }
 
@@ -272,7 +339,7 @@ mod tests {
         let s = sensed("V1", "W1", "V1");
         let fragment = extract(&s, &Selection::all(&s));
         let mut target = s.clone();
-        insert(&mut target, &fragment, Point::new(0, 10));
+        insert(&mut target, &fragment, Point::new(0, 20));
         let names: Vec<_> = target.components.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["W1", "V1", "W2", "V2"]);
         assert_eq!(control_of(&target, "W1"), "V1", "the original is untouched");
@@ -291,7 +358,7 @@ mod tests {
         selection.insert(ObjectRef::Component(s.components[0].id));
         let fragment = extract(&s, &selection);
         let mut target = s.clone();
-        insert(&mut target, &fragment, Point::new(0, 10));
+        insert(&mut target, &fragment, Point::new(0, 20));
         assert_eq!(control_of(&target, "W2"), "V1");
         // Only a renamed voltage source is followed: the fragment's resistor
         // R1 clashes with the target's and becomes R2, but a (dangling)
@@ -302,13 +369,13 @@ mod tests {
         s.components.push(Component {
             id,
             name: "R1".into(),
-            position: Point::new(20, 0),
+            position: Point::new(40, 0),
             orientation: Orientation::default(),
             part: Part::Resistor { resistance: 1e3 },
         });
         let fragment = extract(&s, &Selection::all(&s));
         let mut target = source();
-        insert(&mut target, &fragment, Point::new(0, 10));
+        insert(&mut target, &fragment, Point::new(0, 20));
         let names: Vec<_> = target.components.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["R1", "D7", "W1", "VS", "R2"]);
         assert_eq!(control_of(&target, "W1"), "R1");
@@ -323,7 +390,7 @@ mod tests {
         let mut more = sensed("V2", "W2", "V2");
         for c in &mut more.components {
             c.id = s.allocate_id();
-            c.position.y = 20;
+            c.position.y = 40;
         }
         s.components.extend(more.components);
         let fragment = extract(&s, &Selection::all(&s));
@@ -332,7 +399,7 @@ mod tests {
         target.components.push(Component {
             id,
             name: "V1".into(),
-            position: Point::new(50, 50),
+            position: Point::new(100, 100),
             orientation: Orientation::default(),
             part: Part::default_for(PartKind::VoltageSource),
         });
@@ -345,7 +412,7 @@ mod tests {
 
     #[test]
     fn the_centre_covers_every_object() {
-        assert_eq!(center(&source()), Some(Point::new(1, 3)));
+        assert_eq!(center(&source()), Some(Point::new(2, 6)));
         assert_eq!(center(&Schematic::default()), None);
     }
 }

@@ -7,6 +7,11 @@
 //! the x range and the gutters, so their x axes line up. Only a sweep's x
 //! axis keeps a title, the swept source's name, under the bottom pane.
 //!
+//! Exported panes share the image's height as the panes on screen share
+//! the dock's (D23): in proportion to their weights, none below a minimum
+//! of [`MIN_PANE`] label sizes (the screen's 7.5 rem, whose labels are
+//! 0.75 rem), except that panes too many to fit at it share it equally.
+//!
 //! A pane whose traces have two units (D9) has a second, independently
 //! scaled y axis on the right: its tick labels sit right of the plot, short
 //! tick marks point at them from the plot edge (the grid follows the left
@@ -20,6 +25,7 @@ use super::{
     Anchor, GridLine, Label, PaneScene, Polyline, Rect, Scene, Swatch, TICK_MARK, text_width,
 };
 use crate::model::axis::{AxisMap, AxisRange};
+use crate::model::heights::{DEFAULT_WEIGHT, distribute};
 use crate::model::palette::{Color, PlotColors};
 use crate::model::ticks::{Tick, axis_ticks};
 use crate::model::traces::PlotValues;
@@ -40,6 +46,8 @@ const ENTRY_GAP: f32 = 1.5;
 /// The least space between the left axis's legend and the right axis's,
 /// in label font sizes, when they do not fit above their own axes.
 const GROUP_GAP: f32 = 4.0;
+/// The smallest height of an exported pane, in label font sizes.
+pub const MIN_PANE: f32 = 10.0;
 
 /// The shared x axis.
 #[derive(Debug, Clone)]
@@ -240,16 +248,19 @@ pub fn pane_scene(
     scene
 }
 
-/// Panes stacked in a `width`×`height` image with legends, for export.
+/// Panes stacked in a `width`×`height` image with legends, for export,
+/// sharing its height in proportion to `weights` (D23; a pane without a
+/// weight weighs 1).
 pub fn stacked_scene(
     x: &SceneX,
     panes: &[ScenePane],
+    weights: &[f64],
     width: f32,
     height: f32,
     style: &Style,
     lod: &mut LodCache,
 ) -> Scene {
-    let frames = stack_frames(panes, !x.title.is_empty(), width, height, style);
+    let frames = stack_frames(panes, weights, !x.title.is_empty(), width, height, style);
     Scene {
         width,
         height,
@@ -262,38 +273,51 @@ pub fn stacked_scene(
     }
 }
 
-/// Frames splitting the image height so every plot gets the same height;
-/// the bottom one also holds the x title when `x_title`.
+/// Frames splitting the image height among the panes in proportion to
+/// their `weights`, so equal weights give every plot the same height; the
+/// bottom one also holds the x title when `x_title`, on top of its share.
 fn stack_frames(
     panes: &[ScenePane],
+    weights: &[f64],
     x_title: bool,
     width: f32,
     height: f32,
     style: &Style,
 ) -> Vec<PaneFrame> {
-    let count = panes.len().max(1) as f32;
     let inner = Rect::new(
         IMAGE_MARGIN,
         IMAGE_MARGIN,
         width - 2.0 * IMAGE_MARGIN,
         height - 2.0 * IMAGE_MARGIN,
     );
-    let gutters = count * (style.top_gutter() + style.bottom_gutter(false))
-        + (style.bottom_gutter(x_title) - style.bottom_gutter(false));
-    let plot_height = ((inner.h - gutters) / count).max(1.0);
+    let title_height = style.bottom_gutter(x_title) - style.bottom_gutter(false);
+    let gutters = style.top_gutter() + style.bottom_gutter(false);
+    let weights: Vec<f64> = (0..panes.len())
+        .map(|i| weights.get(i).copied().unwrap_or(DEFAULT_WEIGHT))
+        .collect();
+    let plot_heights: Vec<f32> = distribute(
+        f64::from(inner.h - title_height),
+        &weights,
+        f64::from(MIN_PANE * style.font_size),
+    )
+    .into_iter()
+    .map(|share| (share as f32 - gutters).max(1.0))
+    .collect();
     let left = panes
         .iter()
-        .map(|pane| y_gutter(pane, plot_height, style))
+        .zip(&plot_heights)
+        .map(|(pane, &h)| y_gutter(pane, h, style))
         .fold(0.0, f32::max);
     let right = panes
         .iter()
-        .map(|pane| y2_gutter(pane, plot_height, style))
+        .zip(&plot_heights)
+        .map(|(pane, &h)| y2_gutter(pane, h, style))
         .fold(RIGHT_GUTTER, f32::max);
     let mut y = inner.y;
     (0..panes.len())
         .map(|index| {
             let title = x_title && index + 1 == panes.len();
-            let h = style.top_gutter() + style.bottom_gutter(title) + plot_height;
+            let h = style.top_gutter() + style.bottom_gutter(title) + plot_heights[index];
             let frame = PaneFrame {
                 rect: Rect::new(inner.x, y, inner.w, h),
                 top: style.top_gutter(),
@@ -762,6 +786,7 @@ mod tests {
         let scene = stacked_scene(
             &x_axis(&xs),
             &panes,
+            &[],
             800.0,
             900.0,
             &style,
@@ -847,6 +872,7 @@ mod tests {
         let scene = stacked_scene(
             &sweep,
             &panes,
+            &[],
             800.0,
             600.0,
             &style,
@@ -868,6 +894,7 @@ mod tests {
         let scene = stacked_scene(
             &x_axis(&xs),
             &panes,
+            &[],
             800.0,
             600.0,
             &style,
@@ -876,6 +903,127 @@ mod tests {
         let (top, bottom) = (scene.panes[0].plot, scene.panes[1].plot);
         assert!((top.h - bottom.h).abs() < 0.01);
         assert!(bottom.bottom() + style.bottom_gutter(false) <= 600.0 - IMAGE_MARGIN + 0.01);
+    }
+
+    /// The frame heights of `scene`'s panes, from each plot and its
+    /// gutters.
+    fn frame_heights(scene: &Scene, style: &Style, title: bool) -> Vec<f32> {
+        let count = scene.panes.len();
+        scene
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let bottom = style.bottom_gutter(title && i + 1 == count);
+                style.top_gutter() + p.plot.h + bottom
+            })
+            .collect()
+    }
+
+    /// D23: exported panes share the image's height in proportion to their
+    /// weights, as on screen; a sweep's x title comes on top of the bottom
+    /// pane's share, and the frames still fill the image exactly.
+    #[test]
+    fn exported_panes_follow_their_weights() {
+        let colors = PlotColors::default();
+        let style = style(&colors);
+        let xs = [0.0, 1.0, 2.0];
+        let panes = [mixed(), mixed(), mixed()];
+        for (x, title) in [
+            (x_axis(&xs), false),
+            (
+                SceneX {
+                    title: "V1".into(),
+                    ..x_axis(&xs)
+                },
+                true,
+            ),
+        ] {
+            let scene = stacked_scene(
+                &x,
+                &panes,
+                &[3.0, 1.0, 2.0],
+                800.0,
+                900.0,
+                &style,
+                &mut LodCache::default(),
+            );
+            let frames = frame_heights(&scene, &style, title);
+            let surcharge = style.bottom_gutter(title) - style.bottom_gutter(false);
+            let shares = [frames[0], frames[1], frames[2] - surcharge];
+            let unit = shares[1];
+            assert!((shares[0] - 3.0 * unit).abs() < 0.01, "{shares:?}");
+            assert!((shares[2] - 2.0 * unit).abs() < 0.01, "{shares:?}");
+            let total: f32 = frames.iter().sum();
+            assert!(
+                (total - (900.0 - 2.0 * IMAGE_MARGIN)).abs() < 0.01,
+                "{title}"
+            );
+            // Stacked top to bottom without gaps.
+            for pair in scene.panes.windows(2) {
+                let gap = pair[1].plot.y - pair[0].plot.bottom();
+                assert!((gap - style.bottom_gutter(false) - style.top_gutter()).abs() < 0.01);
+            }
+            // The x axes still line up.
+            assert!(
+                scene
+                    .panes
+                    .iter()
+                    .all(|p| p.plot.x == scene.panes[0].plot.x)
+            );
+        }
+        // Missing weights weigh 1: equal plots, as before D23.
+        let scene = stacked_scene(
+            &x_axis(&xs),
+            &panes,
+            &[1.0],
+            800.0,
+            900.0,
+            &style,
+            &mut LodCache::default(),
+        );
+        let heights: Vec<f32> = scene.panes.iter().map(|p| p.plot.h).collect();
+        assert!(
+            heights.iter().all(|h| (h - heights[0]).abs() < 0.01),
+            "{heights:?}"
+        );
+    }
+
+    /// D23: a light pane keeps the export's minimum height, and panes too
+    /// many for it share the image equally.
+    #[test]
+    fn exported_panes_keep_a_minimum_height() {
+        let colors = PlotColors::default();
+        let style = style(&colors);
+        let xs = [0.0, 1.0, 2.0];
+        let min = MIN_PANE * style.font_size;
+        let scene = stacked_scene(
+            &x_axis(&xs),
+            &[mixed(), mixed()],
+            &[0.01, 1.0],
+            800.0,
+            600.0,
+            &style,
+            &mut LodCache::default(),
+        );
+        let frames = frame_heights(&scene, &style, false);
+        assert!((frames[0] - min).abs() < 0.01, "{frames:?}");
+        assert!((frames[1] - (600.0 - 2.0 * IMAGE_MARGIN - min)).abs() < 0.01);
+        let panes = vec![mixed(); 8];
+        let scene = stacked_scene(
+            &x_axis(&xs),
+            &panes,
+            &[5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.1],
+            800.0,
+            600.0,
+            &style,
+            &mut LodCache::default(),
+        );
+        let frames = frame_heights(&scene, &style, false);
+        assert!(
+            frames.iter().all(|h| (h - frames[0]).abs() < 0.01),
+            "{frames:?}"
+        );
     }
 
     /// D20: freed of the x title, the space under a plot holds only the

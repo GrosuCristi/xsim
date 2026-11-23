@@ -1,16 +1,23 @@
 //! Headless UI tests of the part properties dialog: typing, validation,
 //! applying as one undo step, cancelling, sources, PWL and models.
 //!
+//! The dialog is a window of its own (D22). The helpers keep the test's
+//! `VisualTestContext` on the window that has the keyboard: the editor's,
+//! the properties dialog over it, or the model library over that.
+//!
 //! They locate controls with debug selectors, which only debug builds record.
 #![cfg(debug_assertions)]
 
 use gpui_kit::component::Theme;
 use gpui_kit::{
-    AppContext as _, Bounds, Entity, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, Pixels, Point,
-    TestAppContext, VisualTestContext, WindowBounds, WindowOptions, px, size,
+    AnyWindowHandle, AppContext as _, Bounds, Entity, Focusable as _, KeyDownEvent, KeyUpEvent,
+    Keystroke, Modifiers, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
+    VisualContext as _, VisualTestContext, WindowBounds, WindowOptions, px, size,
 };
-use xsim_editor::SchematicEditor;
+use xsim_editor::dialog_window;
+use xsim_editor::library_browser::{LibraryFilter, open_library};
 use xsim_editor::properties::open_properties;
+use xsim_editor::{ObjectRef, SchematicEditor, Tool};
 use xsim_project::{Component, Id, Part, PartKind, Point as GridPoint, Schematic, SchematicView};
 use xsim_spice_engine::{Polarity, Source, Waveform, library, units::parse_value};
 
@@ -27,7 +34,7 @@ fn schematic(parts: &[(&str, Part)]) -> Schematic {
         schematic.components.push(Component {
             id,
             name: name.to_string(),
-            position: GridPoint::new(8 * n as i32, 0),
+            position: GridPoint::new(16 * n as i32, 0),
             orientation: Default::default(),
             part: part.clone(),
         });
@@ -61,6 +68,7 @@ fn editor_window_sized(
     let (window, editor) = cx.update(|cx| {
         gpui_kit::init(cx);
         cx.set_reduce_motion(true);
+        dialog_window::init(cx);
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -79,16 +87,84 @@ fn editor_window_sized(
     (editor, visual)
 }
 
+/// The editor's window: the one that is no dialog.
+fn main_window(cx: &VisualTestContext) -> AnyWindowHandle {
+    cx.cx
+        .read(|app| {
+            app.windows()
+                .into_iter()
+                .find(|window| dialog_window::owner_of(*window, app).is_none())
+        })
+        .expect("the editor's window")
+}
+
+/// The window with the keyboard: the topmost dialog over the editor.
+fn topmost(cx: &VisualTestContext) -> AnyWindowHandle {
+    let main = main_window(cx);
+    cx.cx.read(|app| dialog_window::topmost(main, app))
+}
+
+/// The open dialog over the editor's window, if any.
+fn dialog(cx: &VisualTestContext) -> Option<AnyWindowHandle> {
+    let main = main_window(cx);
+    cx.cx.read(|app| dialog_window::dialog_of(main, app))
+}
+
+/// Points `cx` at `window`.
+fn switch_to(window: AnyWindowHandle, cx: &mut VisualTestContext) {
+    if cx.window_handle() != window {
+        let next = VisualTestContext::from_window(window, &cx.cx);
+        *cx = next;
+    }
+}
+
+/// Points `cx` at the window with the keyboard, after dialogs opened or
+/// closed.
+fn follow(cx: &mut VisualTestContext) {
+    let top = topmost(cx);
+    switch_to(top, cx);
+}
+
+/// Opens the properties of `id` from the editor's window and points `cx`
+/// at the dialog.
 fn open(editor: &Entity<SchematicEditor>, id: Id, cx: &mut VisualTestContext) {
+    let main = main_window(cx);
+    switch_to(main, cx);
     cx.update(|window, cx| open_properties(editor, id, window, cx));
     cx.run_until_parked();
+    follow(cx);
 }
 
 fn is_shown(selector: &'static str, cx: &mut VisualTestContext) -> bool {
+    follow(cx);
     cx.debug_bounds(selector).is_some()
 }
 
+/// Scrolls the dialog's content until `selector` is in view: a dialog taller
+/// than the screen scrolls (D22).
+fn scroll_into_view(selector: &'static str, cx: &mut VisualTestContext) {
+    let Some(bounds) = cx.debug_bounds(selector) else {
+        return;
+    };
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let top = cx
+        .debug_bounds("dialog-title-bar")
+        .map_or(px(0.), |bar| bar.bottom());
+    if bounds.top() >= top && bounds.bottom() <= viewport.height {
+        return;
+    }
+    let middle = (top + viewport.height) / 2.;
+    cx.simulate_event(ScrollEvent {
+        position: gpui_kit::point(viewport.width / 2., middle),
+        delta: ScrollDelta::Pixels(gpui_kit::point(px(0.), middle - bounds.center().y)),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+}
+
 fn click(selector: &'static str, cx: &mut VisualTestContext) {
+    follow(cx);
+    scroll_into_view(selector, cx);
     let center = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("{selector} should be visible"))
@@ -96,6 +172,15 @@ fn click(selector: &'static str, cx: &mut VisualTestContext) {
     cx.simulate_mouse_move(center, None, Modifiers::default());
     cx.simulate_click(center, Modifiers::default());
     cx.run_until_parked();
+    follow(cx);
+}
+
+/// Types the space-separated `keystrokes` in the window with the keyboard.
+fn keys(keystrokes: &str, cx: &mut VisualTestContext) {
+    follow(cx);
+    cx.simulate_keystrokes(keystrokes);
+    cx.run_until_parked();
+    follow(cx);
 }
 
 /// Replaces the text of the input with debug selector `selector`.
@@ -152,8 +237,7 @@ fn typing_a_value_and_pressing_enter_applies_one_undoable_edit(cx: &mut TestAppC
     assert!(is_shown("field-Resistance", &mut cx));
     type_into("field-Resistance", "4.7k", &mut cx);
     assert!(is_shown("field-Resistance-message", &mut cx));
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert!(
         !is_shown("properties-ok", &mut cx),
         "Enter closes the dialog"
@@ -172,8 +256,7 @@ fn the_value_field_has_the_keyboard_when_the_dialog_opens(cx: &mut TestAppContex
     let (editor, mut cx) = editor_window(cx, resistor());
     open(&editor, 1, &mut cx);
     cx.simulate_input("10M");
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert_eq!(
         part(&editor, 1, &mut cx),
         Part::Resistor { resistance: 1e7 }
@@ -188,8 +271,7 @@ fn invalid_input_shows_an_error_and_blocks_applying(cx: &mut TestAppContext) {
     type_into("field-Resistance", "abc", &mut cx);
     assert!(is_shown("field-Resistance-error", &mut cx));
     click("properties-ok", &mut cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert!(is_shown("properties-ok", &mut cx), "the dialog stays open");
     assert_eq!(
         editor.read_with(&cx, |e, _| e.schematic().clone()),
@@ -225,8 +307,7 @@ fn a_duplicate_designator_is_rejected_inline(cx: &mut TestAppContext) {
     open(&editor, 2, &mut cx);
     type_into("field-Designator", "R1", &mut cx);
     assert!(is_shown("field-Designator-error", &mut cx));
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert!(is_shown("properties-ok", &mut cx));
     assert_eq!(
         editor.read_with(&cx, |e, _| e.schematic().clone()),
@@ -249,8 +330,7 @@ fn escape_and_cancel_discard_the_form(cx: &mut TestAppContext) {
     let (editor, mut cx) = editor_window(cx, original.clone());
     open(&editor, 1, &mut cx);
     type_into("field-Resistance", "1", &mut cx);
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
+    keys("escape", &mut cx);
     assert!(
         !is_shown("properties-ok", &mut cx),
         "Escape closes the dialog"
@@ -521,8 +601,7 @@ fn source_controls_stay_inside_the_dialog_at_every_ui_scale(cx: &mut TestAppCont
             ],
             &mut cx,
         );
-        cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
+        keys("escape", &mut cx);
     }
 }
 
@@ -542,8 +621,7 @@ fn passive_and_model_controls_stay_inside_the_dialog(cx: &mut TestAppContext) {
         ],
         &mut cx,
     );
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
+    keys("escape", &mut cx);
     open(&editor, 2, &mut cx);
     assert_inside_dialog(&["model-name", "choose-model", "properties-ok"], &mut cx);
 }
@@ -587,15 +665,28 @@ fn a_designator_refused_by_the_editor_is_shown_inline(cx: &mut TestAppContext) {
     assert_eq!(name.as_deref(), Some("Ry"));
 }
 
+/// A click on the editor's window, under the dialog, neither closes the
+/// dialog nor reaches the editor: it brings the dialog to the front.
 #[gpui_kit::test]
 fn clicking_outside_the_dialog_keeps_the_form(cx: &mut TestAppContext) {
     let (editor, mut cx) = editor_window(cx, resistor());
     open(&editor, 1, &mut cx);
     type_into("field-Resistance", "47", &mut cx);
+    let mut main = VisualTestContext::from_window(main_window(&cx), &cx.cx);
     let outside = gpui_kit::point(px(60.), px(840.));
-    cx.simulate_mouse_move(outside, None, Modifiers::default());
-    cx.simulate_click(outside, Modifiers::default());
-    cx.run_until_parked();
+    main.simulate_mouse_move(outside, None, Modifiers::default());
+    main.simulate_click(outside, Modifiers::default());
+    main.run_until_parked();
+    assert_eq!(
+        editor.read_with(&main, |e, _| e.selection()),
+        Vec::new(),
+        "the editor got no click"
+    );
+    assert_eq!(
+        main.update(|_, cx| cx.active_window()),
+        dialog(&main),
+        "the dialog came to the front"
+    );
     assert!(is_shown("properties-ok", &mut cx), "the dialog stays open");
     click("properties-ok", &mut cx);
     assert_eq!(
@@ -612,8 +703,7 @@ fn enter_in_the_model_library_picks_and_returns_to_the_form(cx: &mut TestAppCont
     click("choose-model", &mut cx);
     let model = other_pnp_model();
     cx.simulate_input(&model);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    keys("enter", &mut cx);
     assert!(
         !is_shown("library-search", &mut cx),
         "Enter closes only the library"
@@ -638,8 +728,12 @@ fn voltage_source() -> Schematic {
 
 /// Presses and releases each of the space-separated `keys`, as a keyboard
 /// does: a focused button is pressed on the release.
+/// Presses and releases each of the space-separated `keys` in the window
+/// with the keyboard. A press that closes that window leaves the release
+/// nowhere, as it is released in another window.
 fn press(keys: &str, cx: &mut VisualTestContext) {
     for key in keys.split(' ') {
+        follow(cx);
         let keystroke = cx
             .update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os))
             .unwrap_or_else(|_| panic!("{key} is not a key"));
@@ -648,9 +742,12 @@ fn press(keys: &str, cx: &mut VisualTestContext) {
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(KeyUpEvent { keystroke });
+        if cx.windows().contains(&cx.window_handle()) {
+            cx.simulate_event(KeyUpEvent { keystroke });
+        }
         cx.run_until_parked();
     }
+    follow(cx);
 }
 
 fn schematic_of(editor: &Entity<SchematicEditor>, cx: &mut VisualTestContext) -> Schematic {
@@ -693,8 +790,10 @@ fn the_waveform_types_work_from_the_keyboard(cx: &mut TestAppContext) {
 }
 
 /// Enter on a focused dialog button presses it rather than confirming the
-/// dialog: Cancel and the close button discard a valid edit, Apply keeps
-/// the dialog open.
+/// dialog: Cancel discards a valid edit, Apply keeps the dialog open. The
+/// window's close button is a window control, no tab stop (D22): Tab goes
+/// from OK round to the designator, where Enter applies; a click on the
+/// close button discards the edit.
 #[gpui_kit::test]
 fn enter_presses_the_focused_dialog_button(cx: &mut TestAppContext) {
     let original = resistor();
@@ -723,15 +822,26 @@ fn enter_presses_the_focused_dialog_button(cx: &mut TestAppContext) {
     assert_one_undo_step(&editor, &original, &mut cx);
 
     open(&editor, 1, &mut cx);
-    type_into("field-Resistance", "1k", &mut cx);
-    // Resistance, Cancel, Apply, OK, then the close button.
-    press("tab tab tab tab", &mut cx);
-    press("enter", &mut cx);
+    type_into("field-Resistance", "2.2k", &mut cx);
+    click("dialog-close", &mut cx);
     assert!(
         !is_shown("properties-ok", &mut cx),
         "the close button closed it"
     );
     assert_eq!(schematic_of(&editor, &mut cx), original, "nothing applied");
+
+    open(&editor, 1, &mut cx);
+    type_into("field-Resistance", "2.2k", &mut cx);
+    // Resistance, Cancel, Apply, OK, then round to the designator.
+    press("tab tab tab tab", &mut cx);
+    press("enter", &mut cx);
+    assert!(!is_shown("properties-ok", &mut cx), "Enter applied");
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::Resistor {
+            resistance: si("2.2k")
+        }
+    );
 }
 
 /// Enter in a text field applies the form only when every field is valid.
@@ -880,6 +990,7 @@ fn set_font_size(font_size: f32, cx: &mut VisualTestContext) {
 /// The bounds of the element with debug selector `selector`, which must be
 /// shown.
 fn shown(selector: &str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
+    follow(cx);
     let key: &'static str = Box::leak(selector.to_owned().into_boxed_str());
     cx.debug_bounds(key)
         .unwrap_or_else(|| panic!("{selector} should be visible"))
@@ -1080,10 +1191,10 @@ fn the_source_dialog_is_narrow_with_half_width_fields(cx: &mut TestAppContext) {
             &mut cx,
         );
         // The dialog fits its form exactly: two field columns, then the
-        // 15 rem preview reaching the kit's 16 px padding and 1 px border.
+        // 15 rem preview reaching the window's 16 px padding.
         let preview = shown("waveform-preview", &mut cx);
         assert!(
-            close(dialog.right() - preview.right(), px(17.)),
+            close(dialog.right() - preview.right(), dialog_window::PADDING),
             "{font_size}: {preview:?} in {dialog:?}"
         );
         assert!(
@@ -1147,8 +1258,12 @@ fn long_labels_and_messages_wrap_inside_their_column(cx: &mut TestAppContext) {
         assert!(close(shown("field-Rise delay", &mut cx).top(), input.top()));
 
         click("waveform-SINE", &mut cx);
-        // "Frequency" and "Delay", then "Damping" and "Phase".
-        let next_row = shown("field-Damping", &mut cx).top();
+        // "Frequency" and "Delay", then "Damping" and "Phase". Measured from
+        // the Frequency box, as the dialog may scroll to it at 200%.
+        let below_frequency = |cx: &mut VisualTestContext| {
+            shown("field-Damping", cx).top() - shown("field-Frequency", cx).top()
+        };
+        let next_row = below_frequency(&mut cx);
         // Typing passes through invalid text ("-" of "-5", "1e" of "1e-3"):
         // its one-line error does not move the rows below.
         type_into("field-Frequency", "1e", &mut cx);
@@ -1157,7 +1272,7 @@ fn long_labels_and_messages_wrap_inside_their_column(cx: &mut TestAppContext) {
             close(error.size.height, px(font_size)),
             "{font_size}: one line"
         );
-        assert!(close(shown("field-Damping", &mut cx).top(), next_row));
+        assert!(close(below_frequency(&mut cx), next_row));
         // A longer error wraps inside its column and moves them down.
         type_into("field-Frequency", "0", &mut cx);
         let error = shown("field-Frequency-error", &mut cx);
@@ -1237,8 +1352,9 @@ fn other_part_dialogs_keep_their_layout(cx: &mut TestAppContext) {
             let dialog = shown("dialog-0", &mut cx);
             assert!(close(dialog.size.width, px(32.5 * font_size)), "{case}");
             // Two columns sharing the content's width (32.5 rem less the
-            // kit's 2 × 17 px sides) and a 0.75 rem gap.
-            let column = (px(32.5 * font_size) - px(34.) - px(0.75 * font_size)) / 2.;
+            // window's 2 × 16 px padding) and a 0.75 rem gap.
+            let column =
+                (px(32.5 * font_size) - dialog_window::PADDING * 2. - px(0.75 * font_size)) / 2.;
             let designator = shown("field-Designator", &mut cx);
             assert!(
                 close(designator.size.width, column),
@@ -1313,23 +1429,42 @@ const PULSE_FIELDS: [&str; 8] = [
     "Cycles",
 ];
 
-/// D20 at 200% in real window sizes: the app's smallest window (900 × 560,
-/// see crates/desktop) narrows the dialog below its form's width and
-/// scrolls its body. The fields keep their width, the preview gives up the
-/// room, and nothing is cut off at the sides.
+/// D20 at 200%, with the dialog in a window of its own (D22) over the app's
+/// smallest window (900 × 560, see crates/desktop) or a 1200 × 900 one: the
+/// dialog keeps its form's width, stays on the 1920 × 1080 test screen and,
+/// being taller than the screen, scrolls its content and footer. The fields
+/// keep their width, nothing is cut off at the sides, and scrolling reaches
+/// the buttons.
 fn assert_source_dialog_fits(width: f32, height: f32, cx: &mut TestAppContext) {
     let font_size = 32.;
     let (editor, mut cx) = editor_window_sized(cx, pulse_source(), width, height);
     set_font_size(font_size, &mut cx);
     open(&editor, 1, &mut cx);
     let case = format!("{width} × {height}");
+    let (window, screen, viewport) = cx.update(|window, cx| {
+        let screen = window.display(cx).map(|display| display.bounds());
+        (window.bounds(), screen, window.viewport_size())
+    });
+    let screen = screen.expect("a screen");
+    assert!(
+        within(window, screen),
+        "{case}: {window:?} leaves {screen:?}"
+    );
     let dialog = shown("dialog-0", &mut cx);
     assert!(
-        dialog.left() >= px(0.)
-            && dialog.right() <= px(width)
-            && dialog.top() >= px(0.)
-            && dialog.bottom() <= px(height),
-        "{case}: {dialog:?} leaves the window"
+        dialog.left() >= px(0.) && dialog.right() <= viewport.width,
+        "{case}: {dialog:?} is cut off at the sides of {viewport:?}"
+    );
+    assert!(
+        close(
+            dialog.size.width,
+            px(font_size * 29.75) + dialog_window::PADDING * 2.
+        ),
+        "{case}: the form's width {dialog:?}"
+    );
+    assert!(
+        dialog.bottom() > viewport.height,
+        "{case}: taller than the screen, so it scrolls"
     );
     for button in ["properties-cancel", "properties-apply", "properties-ok"] {
         let bounds = shown(button, &mut cx);
@@ -1372,6 +1507,19 @@ fn assert_source_dialog_fits(width: f32, height: f32, cx: &mut TestAppContext) {
             < shown("waveform-preview-end", &mut cx).left(),
         "{case}: the times do not collide"
     );
+    cx.simulate_event(ScrollEvent {
+        position: gpui_kit::point(viewport.width / 2., viewport.height / 2.),
+        delta: ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-4000.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    let ok = shown("properties-ok", &mut cx);
+    assert!(
+        ok.top() >= px(0.) && ok.bottom() <= viewport.height,
+        "{case}: scrolled into view {ok:?}"
+    );
+    click("properties-ok", &mut cx);
+    assert!(!is_shown("properties-ok", &mut cx), "{case}: OK closes");
 }
 
 #[gpui_kit::test]
@@ -1586,7 +1734,7 @@ fn the_read_only_source_dialog_is_narrow_too(cx: &mut TestAppContext) {
         set_font_size(font_size, &mut cx);
         open(&editor, 1, &mut cx);
         let dialog = shown("dialog-0", &mut cx);
-        let width = in_rems(dialog.size.width - px(34.), font_size);
+        let width = in_rems(dialog.size.width - dialog_window::PADDING * 2., font_size);
         assert!((width - 29.75).abs() < 0.1, "{font_size}: {width} rem");
         for field in ["field-Designator", "field-DC value", "field-Period"] {
             let rems = in_rems(shown(field, &mut cx).size.width, font_size);
@@ -1634,17 +1782,19 @@ fn tab_walks_the_source_fields_row_by_row(cx: &mut TestAppContext) {
     }
 }
 
-/// A click on the dialog's title leaves the keyboard on the dialog itself,
-/// not on a control: Enter still applies the form there.
+/// A click on the dialog's title row or on its margin leaves the keyboard
+/// on the dialog itself, not on a control: Enter still applies the form
+/// there.
 #[gpui_kit::test]
 fn enter_after_a_click_on_the_dialog_title_still_applies(cx: &mut TestAppContext) {
     let (editor, mut cx) = editor_window(cx, resistor());
     open(&editor, 1, &mut cx);
     type_into("field-Resistance", "330", &mut cx);
+    click("dialog-title", &mut cx);
     let dialog = cx.debug_bounds("dialog-0").expect("an open dialog");
-    let title = gpui_kit::point(dialog.left() + px(40.), dialog.top() + px(24.));
-    cx.simulate_mouse_move(title, None, Modifiers::default());
-    cx.simulate_click(title, Modifiers::default());
+    let margin = gpui_kit::point(dialog.left() + px(4.), dialog.top() + px(4.));
+    cx.simulate_mouse_move(margin, None, Modifiers::default());
+    cx.simulate_click(margin, Modifiers::default());
     cx.run_until_parked();
     press("enter", &mut cx);
     assert!(!is_shown("properties-ok", &mut cx), "applied and closed");
@@ -1814,9 +1964,11 @@ fn the_keyboard_returns_to_the_form_after_the_model_library(cx: &mut TestAppCont
     press("enter", &mut cx);
     assert!(!is_shown("library-search", &mut cx), "picked");
     assert!(is_shown("properties-ok", &mut cx));
-    // Enter closed the library, so the kit hands the keyboard back only
-    // after its fixed delay.
-    settle_dialog_exit(&mut cx);
+    assert_eq!(
+        cx.update(|_, cx| cx.active_window()),
+        dialog(&cx),
+        "the properties window is active again"
+    );
     press("enter", &mut cx);
     assert!(!is_shown("properties-ok", &mut cx), "applied and closed");
     assert_eq!(
@@ -1834,16 +1986,6 @@ fn the_keyboard_returns_to_the_form_after_the_model_library(cx: &mut TestAppCont
     assert!(is_shown("properties-ok", &mut cx), "the properties did not");
     press("escape", &mut cx);
     assert!(!is_shown("properties-ok", &mut cx), "then they close too");
-}
-
-/// Not an animation (motion is reduced here): when Enter closes a dialog
-/// through the kit's confirmation, the kit gives the keyboard back to what
-/// had it before the dialog opened after a fixed 250 ms. Escape and the
-/// footer buttons give it back at once.
-fn settle_dialog_exit(cx: &mut VisualTestContext) {
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(500));
-    cx.run_until_parked();
 }
 
 /// The field selectors of a switch's model, for the given threshold and
@@ -2117,4 +2259,480 @@ fn switch_dialogs_keep_their_layout_at_every_ui_scale(cx: &mut TestAppContext) {
             press("escape", &mut cx);
         }
     }
+}
+
+/// The editor's window, seen by a test context of its own.
+fn editor_cx(cx: &VisualTestContext) -> VisualTestContext {
+    VisualTestContext::from_window(main_window(cx), &cx.cx)
+}
+
+/// Clicks the editor's canvas far from every part, which gives the editor
+/// the keyboard, then selects R1.
+fn focus_editor_and_select_r1(editor: &Entity<SchematicEditor>, cx: &mut VisualTestContext) {
+    let empty = gpui_kit::point(px(1000.), px(700.));
+    cx.simulate_mouse_move(empty, None, Modifiers::default());
+    cx.simulate_click(empty, Modifiers::default());
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.set_selection([ObjectRef::Component(1)], cx)
+    });
+    assert!(
+        cx.update(|window, cx| editor.read(cx).focus_handle(cx).is_focused(window)),
+        "the editor has the keyboard"
+    );
+}
+
+/// D22: the properties open in a window of their own, centred across the
+/// editor's window and titled like the dialog. The editor's window ignores
+/// clicks and keys meanwhile: a click on the canvas does not clear the
+/// selection and Delete does not delete it. Escape closes the window
+/// without applying, and the editor's window works again.
+#[gpui_kit::test]
+fn the_properties_open_in_a_window_of_their_own(cx: &mut TestAppContext) {
+    let original = resistor();
+    let (editor, mut cx) = editor_window(cx, original.clone());
+    let mut main = editor_cx(&cx);
+    focus_editor_and_select_r1(&editor, &mut main);
+    let windows = cx.windows().len();
+    let owner = main.update(|window, _| window.bounds());
+    open(&editor, 1, &mut cx);
+    assert_eq!(cx.windows().len(), windows + 1, "a window of its own");
+    assert_ne!(cx.window_handle(), main.window_handle());
+    assert_eq!(cx.window_title().as_deref(), Some("R1 \u{b7} Resistor"));
+    let bounds = cx.update(|window, _| window.bounds());
+    assert!(close(bounds.center().x, owner.center().x), "{bounds:?}");
+    assert!(
+        (bounds.center().y - owner.center().y).abs() <= px(8.),
+        "centred down, within half a rem: {bounds:?} over {owner:?}"
+    );
+    assert!(within(bounds, owner), "{bounds:?} inside {owner:?}");
+
+    type_into("field-Resistance", "2k", &mut cx);
+    let empty = gpui_kit::point(px(1000.), px(700.));
+    main.simulate_mouse_move(empty, None, Modifiers::default());
+    main.simulate_click(empty, Modifiers::default());
+    main.simulate_keystrokes("delete r");
+    main.run_until_parked();
+    editor.read_with(&main, |editor, _| {
+        assert_eq!(editor.selection(), [ObjectRef::Component(1)], "no click");
+        assert_eq!(editor.schematic(), &original, "no Delete");
+        assert_eq!(editor.tool(), Tool::Select, "no tool shortcut");
+    });
+    assert!(is_shown("properties-ok", &mut cx), "the dialog stays open");
+
+    press("escape", &mut cx);
+    assert_eq!(cx.windows().len(), windows, "Escape closed the window");
+    assert_eq!(schematic_of(&editor, &mut cx), original, "nothing applied");
+    assert_eq!(
+        main.update(|_, cx| cx.active_window()),
+        Some(main.window_handle()),
+        "the editor's window is active again"
+    );
+    main.simulate_keystrokes("delete");
+    main.run_until_parked();
+    assert!(
+        editor.read_with(&main, |editor, _| editor.schematic().components.is_empty()),
+        "the editor has the keyboard back"
+    );
+}
+
+/// D22: OK in the window applies the form to the editor in the main window
+/// as one undo step and closes the window.
+#[gpui_kit::test]
+fn ok_in_the_properties_window_applies_to_the_editor(cx: &mut TestAppContext) {
+    let original = resistor();
+    let (editor, mut cx) = editor_window(cx, original.clone());
+    let windows = cx.windows().len();
+    open(&editor, 1, &mut cx);
+    type_into("field-Resistance", "330", &mut cx);
+    click("properties-ok", &mut cx);
+    assert_eq!(cx.windows().len(), windows);
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::Resistor { resistance: 330.0 }
+    );
+    assert_one_undo_step(&editor, &original, &mut cx);
+}
+
+/// D22: the model library opens over the properties, in a third window
+/// that the properties window owns and waits for. The properties ignore
+/// clicks and keys meanwhile; the pick fills their form and gives them the
+/// keyboard back.
+#[gpui_kit::test]
+fn the_model_library_stacks_over_the_properties(cx: &mut TestAppContext) {
+    let original = schematic(&[("Q1", Part::default_for(PartKind::PnpBjt))]);
+    let (editor, mut cx) = editor_window(cx, original);
+    let windows = cx.windows().len();
+    open(&editor, 1, &mut cx);
+    let properties = cx.window_handle();
+    click("choose-model", &mut cx);
+    assert_eq!(cx.windows().len(), windows + 2);
+    let library = cx.window_handle();
+    assert_ne!(library, properties);
+    assert_eq!(
+        cx.cx.read(|app| dialog_window::owner_of(library, app)),
+        Some(properties)
+    );
+    assert!(cx.cx.read(|app| dialog_window::is_blocked(properties, app)));
+    assert!(
+        cx.cx
+            .read(|app| dialog_window::is_blocked(main_window(&cx), app))
+    );
+    let lib_bounds = cx.update(|window, _| window.bounds());
+    let mut form = VisualTestContext::from_window(properties, &cx.cx);
+    let form_bounds = form.update(|window, _| window.bounds());
+    assert!(
+        close(lib_bounds.center().x, form_bounds.center().x),
+        "centred over the properties"
+    );
+    // A click and Escape in the properties window do nothing.
+    let cancel = form
+        .debug_bounds("properties-cancel")
+        .expect("the properties' Cancel")
+        .center();
+    form.simulate_mouse_move(cancel, None, Modifiers::default());
+    form.simulate_click(cancel, Modifiers::default());
+    form.simulate_keystrokes("escape");
+    form.run_until_parked();
+    assert_eq!(cx.windows().len(), windows + 2, "both stay open");
+    assert_eq!(
+        cx.update(|_, cx| cx.active_window()),
+        Some(library),
+        "the library came to the front"
+    );
+
+    let model = other_pnp_model();
+    cx.simulate_input(&model);
+    cx.run_until_parked();
+    click("library-pick", &mut cx);
+    assert_eq!(cx.window_handle(), properties, "back in the properties");
+    assert_eq!(cx.windows().len(), windows + 1);
+    assert_eq!(
+        cx.update(|_, cx| cx.active_window()),
+        Some(properties),
+        "the properties are active again"
+    );
+    assert!(is_shown("model-name", &mut cx));
+    press("enter", &mut cx);
+    assert_eq!(cx.windows().len(), windows, "Enter applied and closed");
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::Bjt {
+            polarity: Polarity::P,
+            model
+        }
+    );
+}
+
+/// D22: closing the editor's window closes the dialogs over it, the model
+/// library over the properties too.
+#[gpui_kit::test]
+fn closing_the_editor_window_closes_its_dialogs(cx: &mut TestAppContext) {
+    let original = schematic(&[("Q1", Part::default_for(PartKind::PnpBjt))]);
+    let (editor, mut cx) = editor_window(cx, original);
+    open(&editor, 1, &mut cx);
+    click("choose-model", &mut cx);
+    assert_eq!(cx.windows().len(), 3);
+    let mut main = editor_cx(&cx);
+    main.update(|window, _| window.remove_window());
+    main.run_until_parked();
+    assert!(cx.windows().is_empty(), "every window closed");
+}
+
+/// D22: the window of each part kind opens at about the height its content
+/// measures, so it is centred over the editor's window from the start: the
+/// fit to the content that follows keeps the top edge.
+#[gpui_kit::test]
+fn every_part_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
+    let names = [
+        "R1", "C1", "L1", "V1", "I1", "D1", "Q1", "Q2", "J1", "J2", "GND", "S1", "W1",
+    ];
+    let parts: Vec<(&str, Part)> = names
+        .into_iter()
+        .zip(PartKind::ALL)
+        .map(|(name, kind)| (name, Part::default_for(kind)))
+        .collect();
+    let (editor, mut cx) = editor_window(cx, schematic(&parts));
+    let owner = cx.update(|window, _| window.bounds());
+    for (n, kind) in PartKind::ALL.into_iter().enumerate() {
+        open(&editor, n as Id + 1, &mut cx);
+        let (bounds, rem) = cx.update(|window, _| (window.bounds(), window.rem_size()));
+        let off = (bounds.center().y - owner.center().y).abs();
+        assert!(
+            off <= rem * 0.5,
+            "{kind:?}: {off:?} off centre, {} rem high",
+            bounds.size.height / rem
+        );
+        assert!(close(bounds.center().x, owner.center().x), "{kind:?}");
+        press("escape", &mut cx);
+    }
+}
+
+/// Opens part `id` from the editor's window and checks that the window is
+/// centred over it: down to `allowed`, across to a pixel.
+fn assert_opens_centred(
+    editor: &Entity<SchematicEditor>,
+    id: Id,
+    allowed_rems: f32,
+    case: &str,
+    cx: &mut VisualTestContext,
+) {
+    let owner = editor_cx(cx).update(|window, _| window.bounds());
+    open(editor, id, cx);
+    let (bounds, rem) = cx.update(|window, _| (window.bounds(), window.rem_size()));
+    let off = (bounds.center().y - owner.center().y).abs();
+    assert!(
+        off <= rem * allowed_rems,
+        "{case}: {} rem off centre, {} rem high",
+        off / rem,
+        bounds.size.height / rem
+    );
+    assert!(close(bounds.center().x, owner.center().x), "{case}");
+    press("escape", cx);
+    assert!(dialog(cx).is_none(), "{case}: closed");
+}
+
+/// Within half a rem: what a window opening at its estimated height may be
+/// off centre.
+const ESTIMATED: f32 = 0.5;
+
+/// A sixteenth of a rem: a window opening at the height measured last time.
+const MEASURED: f32 = 0.0625;
+
+/// D22: a source's window opens centred whatever its waveform: each type,
+/// PWL tables of several lengths, current sources and read-only projects.
+/// A source opened after one with another waveform is centred too, exactly
+/// once its own kind has been measured.
+#[gpui_kit::test]
+fn every_source_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
+    let pulse = Waveform::Pulse {
+        initial: 0.0,
+        pulsed: 1.0,
+        delay: 0.0,
+        rise: 1e-6,
+        fall: 1e-6,
+        width: 1e-3,
+        period: 2e-3,
+        cycles: None,
+    };
+    let sine = Waveform::Sine {
+        offset: 0.0,
+        amplitude: 1.0,
+        frequency: 50.0,
+        delay: 0.0,
+        damping: 0.0,
+        phase: 0.0,
+        cycles: None,
+    };
+    let exp = Waveform::Exp {
+        initial: 0.0,
+        pulsed: 1.0,
+        rise_delay: 0.0,
+        rise_tau: 1e-3,
+        fall_delay: 2e-3,
+        fall_tau: 1e-3,
+    };
+    let sffm = Waveform::Sffm {
+        offset: 0.0,
+        amplitude: 1.0,
+        carrier: 1e3,
+        index: 1.0,
+        signal: 50.0,
+    };
+    let pwl = |points: usize| Waveform::Pwl {
+        points: (0..points).map(|i| (i as f64 * 1e-3, i as f64)).collect(),
+        repeat: false,
+    };
+    let mut parts: Vec<Part> = [
+        pulse.clone(),
+        sine,
+        exp,
+        sffm,
+        pwl(1),
+        pwl(2),
+        pwl(3),
+        pwl(6),
+    ]
+    .into_iter()
+    .map(|waveform| Part::VoltageSource {
+        source: Source::with_waveform(waveform),
+    })
+    .collect();
+    parts.insert(0, Part::default_for(PartKind::VoltageSource));
+    parts.push(Part::default_for(PartKind::CurrentSource));
+    parts.push(Part::CurrentSource {
+        source: Source::with_waveform(pulse),
+    });
+    let named: Vec<(String, Part)> = parts
+        .iter()
+        .enumerate()
+        .map(|(n, part)| (format!("X{n}"), part.clone()))
+        .collect();
+    let refs: Vec<(&str, Part)> = named.iter().map(|(n, p)| (n.as_str(), p.clone())).collect();
+    let (editor, mut cx) = editor_window(cx, schematic(&refs));
+    for (n, part) in parts.iter().enumerate() {
+        assert_opens_centred(
+            &editor,
+            n as Id + 1,
+            ESTIMATED,
+            &format!("{part:?}"),
+            &mut cx,
+        );
+    }
+    // The DC source after the others, and the pulse after it.
+    for id in [1, 2] {
+        let case = format!("again: {:?}", parts[id as usize - 1]);
+        assert_opens_centred(&editor, id, MEASURED, &case, &mut cx);
+    }
+    editor.update(&mut cx, |editor, cx| editor.set_read_only(true, cx));
+    for id in [1, 2, 8] {
+        let case = format!("read-only: {:?}", parts[id as usize - 1]);
+        assert_opens_centred(&editor, id, ESTIMATED, &case, &mut cx);
+    }
+}
+
+/// D22: the window of a part with a model opens centred whichever model it
+/// uses (its description takes one line or two, or it is not in the
+/// library), and so do those of the ground, a resistor and a current
+/// switch, also in a read-only project.
+#[gpui_kit::test]
+fn every_model_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
+    /// The models of a family with the shortest and the longest description.
+    fn extremes<M>(entries: Vec<library::ModelEntry<M>>) -> Vec<library::ModelEntry<M>> {
+        let mut entries = entries;
+        entries.sort_by_key(|entry| entry.description.len());
+        let longest = entries.pop();
+        entries.truncate(1);
+        entries.extend(longest);
+        entries
+    }
+    let mut parts: Vec<Part> = Vec::new();
+    parts.extend(
+        extremes(library::diodes())
+            .into_iter()
+            .map(|entry| Part::Diode {
+                model: entry.model.name,
+            }),
+    );
+    parts.extend(
+        extremes(library::bjts())
+            .into_iter()
+            .map(|entry| Part::Bjt {
+                polarity: entry.model.polarity,
+                model: entry.model.name,
+            }),
+    );
+    parts.extend(
+        extremes(library::jfets())
+            .into_iter()
+            .map(|entry| Part::Jfet {
+                polarity: entry.model.polarity,
+                model: entry.model.name,
+            }),
+    );
+    parts.push(Part::Diode {
+        model: "NOT_IN_THE_LIBRARY".into(),
+    });
+    parts.extend(
+        [
+            PartKind::Ground,
+            PartKind::Resistor,
+            PartKind::CurrentSwitch,
+            PartKind::VoltageSource,
+        ]
+        .map(Part::default_for),
+    );
+    let named: Vec<(String, Part)> = parts
+        .iter()
+        .enumerate()
+        .map(|(n, part)| (format!("X{n}"), part.clone()))
+        .collect();
+    let refs: Vec<(&str, Part)> = named.iter().map(|(n, p)| (n.as_str(), p.clone())).collect();
+    let (editor, mut cx) = editor_window(cx, schematic(&refs));
+    let models = parts.len() - 4;
+    for (n, part) in parts.iter().take(parts.len() - 1).enumerate() {
+        assert_opens_centred(
+            &editor,
+            n as Id + 1,
+            ESTIMATED,
+            &format!("{part:?}"),
+            &mut cx,
+        );
+    }
+    editor.update(&mut cx, |editor, cx| editor.set_read_only(true, cx));
+    for n in [0, models, models + 1] {
+        let case = format!("read-only: {:?}", parts[n]);
+        assert_opens_centred(&editor, n as Id + 1, ESTIMATED, &case, &mut cx);
+    }
+}
+
+/// D22: text typed into a blocked window reaches none of its controls. With
+/// a library open over the properties, typing and Backspace in the
+/// properties leave their focused value alone; once the library has closed,
+/// the value takes what is typed.
+#[gpui_kit::test]
+fn typing_into_the_blocked_properties_changes_nothing(cx: &mut TestAppContext) {
+    let (editor, mut cx) = editor_window(cx, resistor());
+    open(&editor, 1, &mut cx);
+    let properties = cx.window_handle();
+    cx.update(|window, cx| open_library(LibraryFilter::All, |_, _, _| {}, window, cx));
+    cx.run_until_parked();
+    follow(&mut cx);
+    assert_ne!(cx.window_handle(), properties, "the library is open");
+    let mut form = VisualTestContext::from_window(properties, &cx.cx);
+    form.simulate_input("47");
+    form.simulate_keystrokes("backspace");
+    form.run_until_parked();
+    press("escape", &mut cx);
+    assert_eq!(cx.window_handle(), properties, "back in the properties");
+    cx.simulate_input("47");
+    press("enter", &mut cx);
+    assert!(dialog(&cx).is_none(), "Enter applied and closed");
+    assert_eq!(
+        part(&editor, 1, &mut cx),
+        Part::Resistor { resistance: 47.0 }
+    );
+}
+
+/// D22: the menus of a dialog stay inside its window, which is smaller than
+/// the main window: a current switch's control menu with many voltage
+/// sources scrolls within the window, so every source can be reached.
+#[gpui_kit::test]
+fn a_long_control_menu_fits_the_properties_window(cx: &mut TestAppContext) {
+    let names: Vec<String> = (1..=40).map(|n| format!("V{n}")).collect();
+    let mut parts = vec![("W1", Part::default_for(PartKind::CurrentSwitch))];
+    parts.extend(
+        names
+            .iter()
+            .map(|name| (name.as_str(), Part::default_for(PartKind::VoltageSource))),
+    );
+    let (editor, mut cx) = editor_window(cx, schematic(&parts));
+    open(&editor, 1, &mut cx);
+    click("switch-control", &mut cx);
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let first = cx
+        .debug_bounds("switch-control-V1")
+        .expect("the menu is open");
+    assert!(first.top() >= px(0.), "{first:?}");
+    // Scroll the menu to its end.
+    for _ in 0..20 {
+        cx.simulate_event(ScrollEvent {
+            position: first.center(),
+            delta: ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))),
+            ..ScrollEvent::default()
+        });
+    }
+    cx.run_until_parked();
+    let last = cx
+        .debug_bounds("switch-control-V40")
+        .expect("the last source is in the menu");
+    assert!(
+        last.top() >= px(0.) && last.bottom() <= viewport.height,
+        "{last:?} in a {viewport:?} window"
+    );
+    click("switch-control-V40", &mut cx);
+    press("enter", &mut cx);
+    assert!(
+        matches!(part(&editor, 1, &mut cx), Part::CurrentSwitch { control, .. } if control == "V40")
+    );
 }

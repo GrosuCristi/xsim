@@ -1,7 +1,10 @@
 //! The editable schematic: parts, wires and net labels on an integer grid.
 //!
 //! Coordinates are grid units with `x` to the right and `y` downwards. Every
-//! pin and wire vertex lies on a grid point.
+//! pin and wire vertex lies on a grid point. A grid unit is the pitch of the
+//! editor's dot grid at its default zoom, so parts, wires and labels snap to
+//! every dot (D22). Schema-2 files used units twice as large; they are
+//! migrated on load (see [`crate::io`]).
 
 mod summary;
 

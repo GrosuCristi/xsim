@@ -1,20 +1,22 @@
 //! Symbol pin geometry. Shared by netlisting and the schematic editor so the
 //! drawn pins and the electrical pins can never disagree.
 //!
-//! Local coordinates, before [`crate::Orientation`]:
+//! Local coordinates in grid units, before [`crate::Orientation`]. A grid
+//! unit is the editor's dot pitch, half the unit of schema-2 files (D22),
+//! so a two-pin part is eight units long:
 //!
 //! | Part | Pins (terminal order) |
 //! |---|---|
-//! | R, C, L, V, I, D | `(−2, 0)` positive/anode, `(2, 0)` negative/cathode |
-//! | BJT | collector `(2, −2)`, base `(−2, 0)`, emitter `(2, 2)` |
-//! | JFET | drain `(2, −2)`, gate `(−2, 0)`, source `(2, 2)` |
-//! | Voltage switch (S) | switch `P (2, −2)`, `N (2, 2)`; control `C+ (−2, −1)`, `C− (−2, 1)` |
-//! | Current switch (W) | `P (−2, 0)`, `N (2, 0)`; the control is a voltage source, by name |
+//! | R, C, L, V, I, D | `(−4, 0)` positive/anode, `(4, 0)` negative/cathode |
+//! | BJT | collector `(4, −4)`, base `(−4, 0)`, emitter `(4, 4)` |
+//! | JFET | drain `(4, −4)`, gate `(−4, 0)`, source `(4, 4)` |
+//! | Voltage switch (S) | switch `P (4, −4)`, `N (4, 4)`; control `C+ (−4, −2)`, `C− (−4, 2)` |
+//! | Current switch (W) | `P (−4, 0)`, `N (4, 0)`; the control is a voltage source, by name |
 //! | Ground | `(0, 0)` |
 //!
 //! The voltage switch's switch path runs down its right side, like a
 //! transistor's collector and emitter, with the control input on the left.
-//! Every pin of a part other than ground is at least two grid units from
+//! Every pin of a part other than ground is at least four grid units from
 //! the centre of its body, so pressing the centre grabs the part.
 
 use crate::schematic::{PartKind, Point};
@@ -31,13 +33,13 @@ pub struct SymbolGeometry {
     pub body_max: Point,
 }
 
-const TWO_PIN: [Point; 2] = [Point::new(-2, 0), Point::new(2, 0)];
-const THREE_PIN: [Point; 3] = [Point::new(2, -2), Point::new(-2, 0), Point::new(2, 2)];
+const TWO_PIN: [Point; 2] = [Point::new(-4, 0), Point::new(4, 0)];
+const THREE_PIN: [Point; 3] = [Point::new(4, -4), Point::new(-4, 0), Point::new(4, 4)];
 const VOLTAGE_SWITCH_PINS: [Point; 4] = [
-    Point::new(2, -2),
-    Point::new(2, 2),
-    Point::new(-2, -1),
-    Point::new(-2, 1),
+    Point::new(4, -4),
+    Point::new(4, 4),
+    Point::new(-4, -2),
+    Point::new(-4, 2),
 ];
 const GROUND_PIN: [Point; 1] = [Point::new(0, 0)];
 
@@ -46,50 +48,50 @@ pub fn geometry(kind: PartKind) -> SymbolGeometry {
         PartKind::Resistor | PartKind::Capacitor | PartKind::Inductor => SymbolGeometry {
             pins: &TWO_PIN,
             pin_names: &["1", "2"],
-            body_min: Point::new(-2, -1),
-            body_max: Point::new(2, 1),
+            body_min: Point::new(-4, -2),
+            body_max: Point::new(4, 2),
         },
         PartKind::VoltageSource | PartKind::CurrentSource => SymbolGeometry {
             pins: &TWO_PIN,
             pin_names: &["+", "−"],
-            body_min: Point::new(-2, -1),
-            body_max: Point::new(2, 1),
+            body_min: Point::new(-4, -2),
+            body_max: Point::new(4, 2),
         },
         PartKind::Diode => SymbolGeometry {
             pins: &TWO_PIN,
             pin_names: &["A", "K"],
-            body_min: Point::new(-2, -1),
-            body_max: Point::new(2, 1),
+            body_min: Point::new(-4, -2),
+            body_max: Point::new(4, 2),
         },
         PartKind::NpnBjt | PartKind::PnpBjt => SymbolGeometry {
             pins: &THREE_PIN,
             pin_names: &["C", "B", "E"],
-            body_min: Point::new(-2, -2),
-            body_max: Point::new(2, 2),
+            body_min: Point::new(-4, -4),
+            body_max: Point::new(4, 4),
         },
         PartKind::NJfet | PartKind::PJfet => SymbolGeometry {
             pins: &THREE_PIN,
             pin_names: &["D", "G", "S"],
-            body_min: Point::new(-2, -2),
-            body_max: Point::new(2, 2),
+            body_min: Point::new(-4, -4),
+            body_max: Point::new(4, 4),
         },
         PartKind::VoltageSwitch => SymbolGeometry {
             pins: &VOLTAGE_SWITCH_PINS,
             pin_names: &["P", "N", "C+", "C−"],
-            body_min: Point::new(-2, -2),
-            body_max: Point::new(2, 2),
+            body_min: Point::new(-4, -4),
+            body_max: Point::new(4, 4),
         },
         PartKind::CurrentSwitch => SymbolGeometry {
             pins: &TWO_PIN,
             pin_names: &["P", "N"],
-            body_min: Point::new(-2, -1),
-            body_max: Point::new(2, 1),
+            body_min: Point::new(-4, -2),
+            body_max: Point::new(4, 2),
         },
         PartKind::Ground => SymbolGeometry {
             pins: &GROUND_PIN,
             pin_names: &["0"],
-            body_min: Point::new(-1, 0),
-            body_max: Point::new(1, 1),
+            body_min: Point::new(-2, 0),
+            body_max: Point::new(2, 2),
         },
     }
 }
@@ -126,7 +128,7 @@ mod tests {
                 );
                 let distance = (a.x - centre.x).abs().max((a.y - centre.y).abs());
                 assert!(
-                    kind == PartKind::Ground || distance >= 2,
+                    kind == PartKind::Ground || distance >= 4,
                     "{kind:?} pin {a:?} is next to the body centre"
                 );
             }
@@ -135,5 +137,28 @@ mod tests {
         assert_eq!(s.pins.len(), 4);
         assert_eq!(s.pin_names, ["P", "N", "C+", "C−"]);
         assert_eq!(geometry(PartKind::CurrentSwitch).pin_names, ["P", "N"]);
+    }
+
+    /// D22: the grid unit is half the schema-2 unit, so every symbol is
+    /// twice the schema-2 geometry: two-pin parts are eight units long, and
+    /// every pin and body corner lies on even coordinates, where a migrated
+    /// schema-2 drawing puts them.
+    #[test]
+    fn symbols_are_twice_the_schema_2_geometry() {
+        assert_eq!(
+            geometry(PartKind::Resistor).pins,
+            [Point::new(-4, 0), Point::new(4, 0)]
+        );
+        assert_eq!(
+            geometry(PartKind::NpnBjt).pins,
+            [Point::new(4, -4), Point::new(-4, 0), Point::new(4, 4)]
+        );
+        for kind in PartKind::ALL {
+            let g = geometry(kind);
+            let corners = [g.body_min, g.body_max];
+            for p in g.pins.iter().chain(&corners) {
+                assert!(p.x % 2 == 0 && p.y % 2 == 0, "{kind:?}: {p:?}");
+            }
+        }
     }
 }

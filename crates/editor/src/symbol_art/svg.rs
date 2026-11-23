@@ -1,6 +1,6 @@
 //! SVG renderings of the symbol artwork, used as crisp toolbar icons.
 
-use super::shapes::{Shape, extent, shapes};
+use super::shapes::{SIGN_ARM, Shape, extent, shapes};
 use crate::model::geometry::Vec2;
 use std::fmt::Write;
 use xsim_project::PartKind;
@@ -49,7 +49,7 @@ fn push_shape(svg: &mut String, shape: &Shape, stroke: f32) {
             center.x, center.y
         ),
         Shape::Sign { at, plus } => {
-            let arm = 0.2;
+            let arm = SIGN_ARM;
             let w = stroke * 0.8;
             let mut d = format!("M{:.3} {:.3}h{:.3}", at.x - arm, at.y, 2.0 * arm);
             if *plus {

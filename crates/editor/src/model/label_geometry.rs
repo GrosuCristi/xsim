@@ -4,13 +4,13 @@ use crate::model::geometry::{Rect, Vec2};
 use xsim_project::{NetLabel, Point, Schematic};
 
 /// Height of a label tag in grid units.
-pub const TAG_HEIGHT: f32 = 1.1;
+pub const TAG_HEIGHT: f32 = 2.2;
 /// Approximate advance of one label character in grid units, for hit testing.
-const CHAR_WIDTH: f32 = 0.5;
+const CHAR_WIDTH: f32 = 1.0;
 /// Space between the tag's point and its text, in grid units.
-pub const TAG_POINT: f32 = 0.45;
+pub const TAG_POINT: f32 = 0.9;
 /// Horizontal text padding inside the tag, in grid units.
-pub const TAG_PADDING: f32 = 0.3;
+pub const TAG_PADDING: f32 = 0.6;
 
 /// The side of its anchor a label tag extends to. Text always stays
 /// horizontal, so it is never upside down.
@@ -101,12 +101,12 @@ mod tests {
 
     #[test]
     fn tags_point_away_from_the_wire() {
-        let s = with_wire(&[(0, 0), (4, 0)]);
+        let s = with_wire(&[(0, 0), (8, 0)]);
         assert_eq!(tag_side(&s, Point::new(0, 0)), TagSide::Left);
-        assert_eq!(tag_side(&s, Point::new(4, 0)), TagSide::Right);
-        let s = with_wire(&[(0, 0), (2, 0), (4, 0)]);
-        assert_eq!(tag_side(&s, Point::new(2, 0)), TagSide::Above);
-        let s = with_wire(&[(0, 0), (0, 4)]);
+        assert_eq!(tag_side(&s, Point::new(8, 0)), TagSide::Right);
+        let s = with_wire(&[(0, 0), (4, 0), (8, 0)]);
+        assert_eq!(tag_side(&s, Point::new(4, 0)), TagSide::Above);
+        let s = with_wire(&[(0, 0), (0, 8)]);
         assert_eq!(tag_side(&s, Point::new(0, 0)), TagSide::Right);
     }
 }

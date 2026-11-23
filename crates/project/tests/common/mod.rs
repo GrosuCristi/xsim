@@ -92,16 +92,16 @@ impl Sketch {
 /// ```
 pub fn rc_low_pass_schematic() -> Schematic {
     let mut s = Sketch::new();
-    // Vertical source with + on top: pin + at (0, 2), pin − at (0, 6).
-    s.voltage(1.0, (0, 4), 1);
-    s.resistor((6, 0), 0); // pins (4, 0) and (8, 0)
-    s.capacitor((12, 4), 1); // pins (12, 2) and (12, 6)
-    s.ground((6, 8)); // on the interior of the bottom rail
-    s.wire(&[(0, 2), (0, 0), (4, 0)]);
-    s.wire(&[(8, 0), (12, 0), (12, 2)]);
-    s.wire(&[(0, 6), (0, 8), (12, 8), (12, 6)]);
+    // Vertical source with + on top: pin + at (0, 4), pin − at (0, 12).
+    s.voltage(1.0, (0, 8), 1);
+    s.resistor((12, 0), 0); // pins (8, 0) and (16, 0)
+    s.capacitor((24, 8), 1); // pins (24, 4) and (24, 12)
+    s.ground((12, 16)); // on the interior of the bottom rail
+    s.wire(&[(0, 4), (0, 0), (8, 0)]);
+    s.wire(&[(16, 0), (24, 0), (24, 4)]);
+    s.wire(&[(0, 12), (0, 16), (24, 16), (24, 12)]);
     s.label("in", (0, 0));
-    s.label("out", (12, 0));
+    s.label("out", (24, 0));
     s.schematic
 }
 

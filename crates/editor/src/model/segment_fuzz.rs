@@ -7,6 +7,10 @@
 //! Joins the drag *adds* are not checked: the moved run, or a stub or bend
 //! drawn straight from a pin, can pass over a pin or a wire end and connect
 //! there, by the connection rules (Q50).
+//!
+//! The drawings are generated twice: once on even coordinates, the
+//! schema-2 drawings of before D22 at the finer grid unit, and once on
+//! every grid unit, where parts, wires and drags can now land on any dot.
 
 use super::segment::SegmentPlan;
 use crate::model::cleanup::normalize;
@@ -41,16 +45,44 @@ impl Rng {
     }
 }
 
+/// Which grid points a random drawing uses.
+#[derive(Clone, Copy)]
+enum Lattice {
+    /// Even coordinates only, with parts every six units: the schema-2
+    /// drawings, doubled.
+    Schema2,
+    /// Every grid unit (D22).
+    Fine,
+}
+
+impl Lattice {
+    /// A part position.
+    fn position(self, rng: &mut Rng) -> Point {
+        match self {
+            Lattice::Schema2 => Point::new(rng.range(0, 8) * 6, rng.range(0, 8) * 6),
+            Lattice::Fine => Point::new(rng.range(0, 48), rng.range(0, 48)),
+        }
+    }
+
+    /// A free coordinate for a wire point.
+    fn coordinate(self, rng: &mut Rng) -> i32 {
+        match self {
+            Lattice::Schema2 => 2 * rng.range(-2, 26),
+            Lattice::Fine => rng.range(-4, 52),
+        }
+    }
+}
+
 /// Two to four resistors and up to four orthogonal wires between pins,
 /// points on earlier wires (T-junctions) and free points, sometimes a label.
-fn random_schematic(rng: &mut Rng) -> Schematic {
+fn random_schematic(rng: &mut Rng, lattice: Lattice) -> Schematic {
     let mut s = Schematic::default();
     for _ in 0..rng.range(2, 4) {
         let id = s.allocate_id();
         let c = Component {
             id,
             name: format!("R{id}"),
-            position: Point::new(rng.range(0, 8) * 3, rng.range(0, 8) * 3),
+            position: lattice.position(rng),
             orientation: Orientation {
                 rotation: u8::from(rng.below(2) == 1),
                 ..Orientation::default()
@@ -80,7 +112,7 @@ fn random_schematic(rng: &mut Rng) -> Schematic {
                 let t = rng.range(0, 4);
                 Point::new(a.x + (b.x - a.x) * t / 4, a.y + (b.y - a.y) * t / 4)
             }
-            _ => Point::new(rng.range(-2, 26), rng.range(-2, 26)),
+            _ => Point::new(lattice.coordinate(rng), lattice.coordinate(rng)),
         };
         let (a, b) = (pick(rng), pick(rng));
         let mut points = vec![a];
@@ -88,7 +120,7 @@ fn random_schematic(rng: &mut Rng) -> Schematic {
             0 => points.push(Point::new(b.x, a.y)),
             1 => points.push(Point::new(a.x, b.y)),
             _ => {
-                let x = rng.range(-2, 26);
+                let x = lattice.coordinate(rng);
                 points.extend([Point::new(x, a.y), Point::new(x, b.y)]);
             }
         }
@@ -204,19 +236,20 @@ fn problems(
     problems
 }
 
-#[test]
-fn random_segment_drags_keep_every_connection() {
+/// Drags every run of every wire of [`CASES`] random drawings on
+/// `lattice` by every distance up to 12 units.
+fn drag_randomly(lattice: Lattice) {
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let mut failures: Vec<String> = Vec::new();
     let mut drags = 0;
     for _ in 0..CASES {
-        let s = random_schematic(&mut rng);
+        let s = random_schematic(&mut rng, lattice);
         for w in &s.wires {
             for segment in 0..w.points.len() - 1 {
                 let Some(plan) = SegmentPlan::new(&s, w.id, segment) else {
                     continue;
                 };
-                for d in -6..=6 {
+                for d in -12..=12 {
                     let out = plan.apply(Point::new(d, d));
                     drags += 1;
                     let found = problems(&s, w, &plan, &out, d);
@@ -243,4 +276,15 @@ fn random_segment_drags_keep_every_connection() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+}
+
+#[test]
+fn random_segment_drags_keep_every_connection() {
+    drag_randomly(Lattice::Schema2);
+}
+
+/// D22: the same on drawings using every grid unit, odd ones included.
+#[test]
+fn random_segment_drags_on_every_dot_keep_every_connection() {
+    drag_randomly(Lattice::Fine);
 }

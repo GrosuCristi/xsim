@@ -197,17 +197,17 @@ pub fn rc_schematic(with_ground: bool) -> Schematic {
         component(
             1,
             "V1",
-            (0, 4),
+            (0, 8),
             1,
             Part::VoltageSource {
                 source: Source::dc(1.0),
             },
         ),
-        component(2, "R1", (4, 0), 0, Part::Resistor { resistance: 1e3 }),
+        component(2, "R1", (8, 0), 0, Part::Resistor { resistance: 1e3 }),
         component(
             3,
             "C1",
-            (8, 4),
+            (16, 8),
             1,
             Part::Capacitor {
                 capacitance: 1e-6,
@@ -216,20 +216,20 @@ pub fn rc_schematic(with_ground: bool) -> Schematic {
         ),
     ];
     if with_ground {
-        components.push(component(4, "GND1", (4, 8), 0, Part::Ground));
+        components.push(component(4, "GND1", (8, 16), 0, Part::Ground));
     }
     Schematic {
         components,
         wires: vec![
-            wire(5, &[(0, 2), (0, 0), (2, 0)]),
-            wire(6, &[(6, 0), (8, 0), (8, 2)]),
-            wire(7, &[(0, 6), (0, 8), (4, 8)]),
-            wire(8, &[(8, 6), (8, 8), (4, 8)]),
+            wire(5, &[(0, 4), (0, 0), (4, 0)]),
+            wire(6, &[(12, 0), (16, 0), (16, 4)]),
+            wire(7, &[(0, 12), (0, 16), (8, 16)]),
+            wire(8, &[(16, 12), (16, 16), (8, 16)]),
         ],
         labels: vec![NetLabel {
             id: 9,
             name: "out".into(),
-            position: GridPoint::new(8, 0),
+            position: GridPoint::new(16, 0),
         }],
         next_id: 10,
     }
@@ -310,7 +310,7 @@ pub fn switch_project() -> Project {
     let parts: [SwitchBenchPart; 9] = [
         (
             "Vdd",
-            (-20, -6),
+            (-40, -12),
             0,
             Part::VoltageSource {
                 source: Source::dc(1.0),
@@ -319,42 +319,42 @@ pub fn switch_project() -> Project {
         ),
         (
             "Vctl",
-            (-10, -6),
+            (-20, -12),
             0,
             Part::VoltageSource {
                 source: square(1.0),
             },
             &["ctl", "0"],
         ),
-        ("R1", (0, -6), 0, resistor.clone(), &["vdd", "out"]),
+        ("R1", (0, -12), 0, resistor.clone(), &["vdd", "out"]),
         (
             "S1",
-            (10, -6),
+            (20, -12),
             0,
             Part::default_for(PartKind::VoltageSwitch),
             &["out", "0", "ctl", "0"],
         ),
         (
             "Vdrv",
-            (20, -6),
+            (40, -12),
             0,
             Part::VoltageSource {
                 source: square(2.0),
             },
             &["drv", "0"],
         ),
-        ("R2", (-20, 6), 0, resistor.clone(), &["drv", "sense"]),
+        ("R2", (-40, 12), 0, resistor.clone(), &["drv", "sense"]),
         (
             "Vsense",
-            (-10, 6),
+            (-20, 12),
             0,
             Part::VoltageSource {
                 source: Source::dc(0.0),
             },
             &["sense", "0"],
         ),
-        ("R3", (0, 6), 0, resistor, &["vdd", "out2"]),
-        ("W1", (10, 6), 1, current_switch, &["out2", "0"]),
+        ("R3", (0, 12), 0, resistor, &["vdd", "out2"]),
+        ("W1", (20, 12), 1, current_switch, &["out2", "0"]),
     ];
     let mut schematic = Schematic::default();
     for (name, position, rotation, part, nets) in parts {
@@ -403,4 +403,41 @@ pub fn series_capacitor_project() -> Project {
     }
     schematic.labels[0].name = "mid".into();
     project
+}
+
+/// The dialog window over `cx`'s window (D22), the topmost one when
+/// dialogs are stacked, as a test context of its own.
+pub fn try_dialog(cx: &VisualTestContext) -> Option<VisualTestContext> {
+    use gpui_kit::VisualContext as _;
+    let owner = cx.window_handle();
+    let top = cx
+        .cx
+        .read(|app| xsim_editor::dialog_window::topmost(owner, app));
+    (top != owner).then(|| VisualTestContext::from_window(top, &cx.cx))
+}
+
+/// [`try_dialog`], which must find one.
+pub fn dialog(cx: &VisualTestContext) -> VisualTestContext {
+    try_dialog(cx).expect("a dialog window is open")
+}
+
+/// Whether a dialog window is open over `cx`'s window.
+pub fn has_dialog(cx: &VisualTestContext) -> bool {
+    try_dialog(cx).is_some()
+}
+
+/// Presses and releases `key` in a dialog window, as [`press`] does; when
+/// the press closes the window, the release goes nowhere.
+pub fn press_in_dialog(key: &'static str, cx: &mut VisualTestContext) {
+    use gpui_kit::VisualContext as _;
+    let keystroke = Keystroke::parse(key).unwrap_or_else(|_| panic!("{key} is not a key"));
+    cx.simulate_event(KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    if cx.windows().contains(&cx.window_handle()) {
+        cx.simulate_event(KeyUpEvent { keystroke });
+    }
+    cx.run_until_parked();
 }

@@ -31,7 +31,7 @@ The engine uses a sparse LU (faer, sequential) in production and a dense LU (nal
 
 ## D4 — Project file is readable JSON (owner decision, 2026-11-22)
 
-Q33 asks for CPU performance and Q42 for clean Git diffs. The owner chose readable JSON for everything, including stored results. Output is canonical: struct field order, 2-space indent, LF line endings and a trailing newline. Floats round-trip exactly, and every save is atomic. The schema is versioned and migrates older schemas: schema 1 is the first prototype, schema 2 is current.
+Q33 asks for CPU performance and Q42 for clean Git diffs. The owner chose readable JSON for everything, including stored results. Output is canonical: struct field order, 2-space indent, LF line endings and a trailing newline. Floats round-trip exactly, and every save is atomic. The schema is versioned and migrates older schemas: schema 1 is the first prototype, schema 2 the first rebuild format, and schema 3 (D22, doubled coordinate resolution) is current.
 
 ## D5 — Transient start (owner decision, 2026-11-22)
 
@@ -89,7 +89,7 @@ Schematic:
 - The component library search field's focus ring is not clipped.
 - Clicking a whole category row in the library tree opens or closes it, and the arrow has no hover background.
 - Circuit tabs use the kit's Folder tab design, with the "+" right after the last tab and a tighter margin after the close icon.
-- The dot grid is drawn twice as dense (every half unit at the default zoom). Snapping stays at whole units.
+- The dot grid is drawn twice as dense (every half unit at the default zoom). Snapping stays at whole units. *(Amended by D22: snapping now matches every dot.)*
 
 ## D15 — Floating capacitor nodes (owner decision, 2026-11-22)
 
@@ -170,3 +170,27 @@ The implementers made these choices where the decisions above did not say; each 
 ## D21 — License (owner decision, 2026-11-23, answers Q165)
 
 xsim is dual-licensed under MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`; `license` in every crate manifest). The repository is public at https://github.com/GrosuCristi/xsim.
+
+## D22 — Owner UI feedback, round 4 (2026-11-23)
+
+- **Dialogs are separate OS windows.** Every panel that used to open on top of the content now opens as its own modal OS window: part properties, component library, simulation settings, settings and crash recovery. The window is centred over the main window and stays in front of it. The main window ignores clicks and keys until the dialog closes; clicking the main window brings the dialog back to the front. There is still no open/close animation (D19).
+- **Add pane** is a plus icon at the very bottom of the plot dock.
+- **Snapping matches the dot grid.** Parts, wires and labels snap to every visible dot, which is half the previous step. The project file therefore stores coordinates at the finer resolution: schema 3 doubles every coordinate, and older files migrate when opened. Symbols keep their size on screen.
+- **D22 (dialog windows, plot dock, grid):**
+  - A dialog's window is sized when it opens and grows or shrinks downward if its content changes.
+  - The library window is resizable; the other dialog windows fit their content.
+  - Recovery Discard removes the row in place.
+  - The dot grid is uniform, with no major-grid emphasis.
+  - The add-pane plus keeps the toolbar's left inset, below the readout.
+
+## D23 — Owner UI feedback, round 5 (2026-11-23)
+
+- The Run button shows the selected simulation type to the right of "Run", for example "Run  Transient", in secondary text. It updates when the analysis changes.
+- Plot pane heights can be changed by dragging the divider between two panes. Heights are saved with the plot setup in the project.
+- **D23 (Run label, pane heights):**
+  - Run uses the dialog's names, so AC shows as "AC sweep".
+  - Below 38 rem of window width, "Op. point" is used and the out-of-date hint is shortened.
+  - When Run's text changes, the active tab is scrolled back into view.
+  - Double-clicking a pane divider makes the two panes equal.
+  - The minimum pane height is 7.5 rem.
+  - Pane heights are stored as relative weights.

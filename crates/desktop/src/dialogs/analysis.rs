@@ -1,16 +1,17 @@
 //! Analysis settings (Q75, Q76): input boxes for each analysis instead of
 //! SPICE directives, values with SI suffixes, validated while typing. The
-//! form logic lives in [`crate::analysis_form`].
+//! form logic lives in [`crate::analysis_form`]. The dialog is a modal
+//! window of its own over the main window (D22).
 
 use crate::analysis_form::{
     AnalysisForm, Field, FieldErrors, METHODS, OPTION_FIELDS, SCALES, SOLVERS, label_of,
     text_fields,
 };
 use crate::simulation::summary::{ANALYSES, analysis_label};
-use crate::ui::{dialog_width, form_row, hint, pressable, section_title, testable};
+use crate::ui::{form_row, hint, pressable, section_title, testable};
 use crate::workspace::Workspace;
 use gpui_kit::component::{
-    Disableable, IconName, Selectable, Sizable, WindowExt,
+    Disableable, IconName, Selectable, Sizable,
     button::{Button, ButtonGroup, ButtonVariants},
     checkbox::Checkbox,
     dialog::DialogFooter,
@@ -20,8 +21,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::*, *};
 use std::collections::BTreeMap;
+use xsim_editor::dialog_window::{self, DialogContent, DialogOptions};
 use xsim_project::{AnalysisChoice, SimulationSetup};
-use xsim_spice_engine::IntegrationMethod;
+use xsim_spice_engine::{InitialState, IntegrationMethod};
 
 /// Under "Start from rest" when it is off (D5, D16): initial conditions
 /// still apply and constrain the operating point.
@@ -70,8 +72,11 @@ pub struct AnalysisDialogInput {
     pub read_only: bool,
 }
 
-/// Opens the dialog; Apply, or Enter in the form, stores the settings in
-/// `workspace`.
+/// Title of the dialog and its window.
+const TITLE: &str = "Analysis settings";
+
+/// Opens the dialog over `window`; Apply, or Enter in the form, stores the
+/// settings in `workspace`.
 pub fn open_analysis_dialog(
     workspace: Entity<Workspace>,
     input: AnalysisDialogInput,
@@ -79,41 +84,71 @@ pub fn open_analysis_dialog(
     cx: &mut App,
 ) {
     let read_only = input.read_only;
-    let form = cx.new(|cx| AnalysisDialog::new(input, window, cx));
-    window.open_dialog(cx, {
-        let form = form.clone();
-        move |dialog, window, _| {
+    let options = window_options(&input);
+    dialog_window::open(window, cx, options, move |window, cx| {
+        let form = cx.new(|cx| AnalysisDialog::new(input, window, cx));
+        // In the form rather than on the dialog itself, so that Enter
+        // applies what was chosen with the mouse.
+        form.focus_handle(cx).focus(window, cx);
+        move |content: DialogContent, _: &mut Window, _: &mut App| {
             let (on_ok_form, on_ok_workspace) = (form.clone(), workspace.clone());
-            dialog
-                .title("Analysis settings")
-                .w(dialog_width(36., window))
+            content
+                .title(TITLE)
                 .child(form.clone())
-                .on_ok(move |_, window, cx| {
-                    confirm(&on_ok_form, &on_ok_workspace, read_only, window, cx)
-                })
+                .on_ok(move |_, cx| confirm(&on_ok_form, &on_ok_workspace, read_only, cx))
                 .footer(footer(&form, &workspace, read_only))
         }
     });
-    // In the form rather than on the dialog itself, so that Enter applies
-    // what was chosen with the mouse.
-    form.focus_handle(cx).focus(window, cx);
 }
 
-/// Enter that no focused control took, as the kit confirms a dialog with
-/// it; whether the dialog closes. In the form (a box, the checkbox or
-/// nothing in particular) it applies like the Apply button and keeps the
-/// dialog open on errors; a read-only project has nothing to apply. On the
-/// kit's close button it closes, as that button does.
+/// The window for `input`. It opens at the height the form is expected to
+/// measure at 100% UI scale, so that it opens centred over the main window
+/// (D22): once open it can only grow or shrink downward. That height
+/// depends on the analysis shown, the notes under it and whether the
+/// project is read-only; each combination is a dialog kind of its own, so a
+/// later opening of it starts at the height measured this time.
+fn window_options(input: &AnalysisDialogInput) -> DialogOptions {
+    let setup = &input.setup;
+    let (kind, mut height) = match setup.selected {
+        AnalysisChoice::OperatingPoint => ("op", 16.75),
+        // A hint in place of the source menu, on two lines.
+        AnalysisChoice::DcSweep if input.sources.is_empty() => ("dc-no-source", 23.5),
+        AnalysisChoice::DcSweep => ("dc", 22.625),
+        AnalysisChoice::Ac => ("ac", 25.75),
+        // The explanation of "Start from rest" is a line shorter when on.
+        AnalysisChoice::Transient if setup.transient.initial_state == InitialState::ZeroState => {
+            ("tran-rest", 28.375)
+        }
+        AnalysisChoice::Transient => ("tran", 29.625),
+    };
+    let backward_euler = setup.options.method == IntegrationMethod::BackwardEuler;
+    if backward_euler {
+        height += 3.1875;
+    }
+    if input.read_only {
+        height += 2.25;
+    }
+    let id = format!(
+        "analysis-{kind}{}{}",
+        if backward_euler {
+            "-backward-euler"
+        } else {
+            ""
+        },
+        if input.read_only { "-read-only" } else { "" },
+    );
+    DialogOptions::new(id, TITLE, 36.).estimated_height(height)
+}
+
+/// Enter that no focused control took; whether the dialog closes. It
+/// applies like the Apply button and keeps the dialog open on errors; a
+/// read-only project has nothing to apply.
 fn confirm(
     form: &Entity<AnalysisDialog>,
     workspace: &Entity<Workspace>,
     read_only: bool,
-    window: &Window,
     cx: &mut App,
 ) -> bool {
-    if !form.focus_handle(cx).contains_focused(window, cx) {
-        return true;
-    }
     !read_only && apply(form, workspace, cx)
 }
 
@@ -140,7 +175,7 @@ fn footer(
             "analysis-cancel",
             pressable(Button::new("analysis-cancel"))
                 .label("Cancel")
-                .on_click(|_, window, cx| window.close_dialog(cx)),
+                .on_click(|_, window, cx| dialog_window::close(window, cx)),
         ))
         .child(testable(
             "analysis-apply",
@@ -150,7 +185,7 @@ fn footer(
                 .disabled(read_only)
                 .on_click(move |_, window, cx| {
                     if apply(&form, &workspace, cx) {
-                        window.close_dialog(cx);
+                        dialog_window::close(window, cx);
                     }
                 }),
         ))
@@ -341,20 +376,27 @@ impl AnalysisDialog {
             .label(current.clone())
             .dropdown_caret(true)
             .disabled(self.read_only)
+            .debug_selector(|| "dc-source".into())
+            // A schematic may have more sources than the dialog's window
+            // (D22) is high: the menu scrolls.
             .dropdown_menu(move |menu, _, _| {
-                sources.iter().fold(menu, |menu, source| {
+                sources.iter().fold(menu.scrollable(true), |menu, source| {
                     let (this, source) = (this.clone(), source.clone());
+                    let (name, selector) = (source.clone(), format!("dc-source-{source}"));
                     menu.item(
-                        PopupMenuItem::new(source.clone())
-                            .checked(source == current)
-                            .on_click(move |_, _, cx| {
-                                this.update(cx, |this, cx| {
-                                    this.form.dc_source = source.clone();
-                                    this.errors.remove(&Field::DcSource);
-                                    cx.notify();
-                                })
-                                .ok();
-                            }),
+                        PopupMenuItem::element(move |_, _| {
+                            let selector = selector.clone();
+                            div().debug_selector(move || selector).child(name.clone())
+                        })
+                        .checked(source == current)
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |this, cx| {
+                                this.form.dc_source = source.clone();
+                                this.errors.remove(&Field::DcSource);
+                                cx.notify();
+                            })
+                            .ok();
+                        }),
                     )
                 })
             });
@@ -708,5 +750,85 @@ mod tests {
         press("enter", &mut cx);
         assert_eq!(method(&view, &cx), IntegrationMethod::Trapezoidal);
         assert!(cx.debug_bounds(BACKWARD_EULER_SELECTOR).is_none());
+    }
+
+    /// D22: the window opens centred over the main window whatever it
+    /// shows: each analysis, with "Start from rest" on or off, the Backward
+    /// Euler note, without a source to sweep and read-only, each after other
+    /// ones. Opened again, it starts at the height it measured, centred to a
+    /// sixteenth of a rem.
+    #[gpui_kit::test]
+    fn the_window_opens_centred_whatever_it_shows(cx: &mut TestAppContext) {
+        use crate::test_support::{TestEnv, dialog, open, press_in_dialog, try_dialog};
+        use xsim_spice_engine::InitialState;
+        init(cx);
+        let env = TestEnv::new();
+        let (workspace, mut window) = open(cx, &env, None);
+        let owner = window.update(|window, _| window.bounds());
+        let mut cases = Vec::new();
+        for choice in ANALYSES {
+            for rest in [false, true] {
+                for method in [
+                    IntegrationMethod::Trapezoidal,
+                    IntegrationMethod::BackwardEuler,
+                ] {
+                    for read_only in [false, true] {
+                        for sources in [true, false] {
+                            let relevant = (!rest || choice == AnalysisChoice::Transient)
+                                && (sources || choice == AnalysisChoice::DcSweep);
+                            if relevant {
+                                cases.push((choice, rest, method, read_only, sources));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Each case after other ones, then the first and the last again.
+        let again = [cases[0], cases[cases.len() - 1]];
+        let openings = cases
+            .into_iter()
+            .map(|case| (case, 0.5))
+            .chain(again.into_iter().map(|case| (case, 0.0625)));
+        for ((choice, rest, method, read_only, sources), allowed) in openings {
+            let case = format!(
+                "{choice:?}, rest {rest}, {method:?}, read-only {read_only}, sources {sources}"
+            );
+            let mut setup = SimulationSetup {
+                selected: choice,
+                ..SimulationSetup::default()
+            };
+            setup.options.method = method;
+            if rest {
+                setup.transient.initial_state = InitialState::ZeroState;
+            }
+            let input = AnalysisDialogInput {
+                setup,
+                sources: if sources {
+                    vec!["V1".into()]
+                } else {
+                    Vec::new()
+                },
+                read_only,
+            };
+            let workspace = workspace.clone();
+            window.update(|window, cx| super::open_analysis_dialog(workspace, input, window, cx));
+            window.run_until_parked();
+            let mut settings = dialog(&window);
+            let (bounds, rem) = settings.update(|window, _| (window.bounds(), window.rem_size()));
+            let off = (bounds.center().y - owner.center().y).abs();
+            assert!(
+                off <= rem * allowed,
+                "{case}: {} rem off centre, {} rem high",
+                off / rem,
+                bounds.size.height / rem
+            );
+            assert!(
+                (bounds.center().x - owner.center().x).abs() <= px(1.),
+                "{case}"
+            );
+            press_in_dialog("escape", &mut settings);
+            assert!(try_dialog(&window).is_none(), "{case}: closed");
+        }
     }
 }

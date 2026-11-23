@@ -56,7 +56,7 @@ pub fn drawing_extent(schematic: &Schematic) -> Option<Rect> {
         let r = label_hit_rect(schematic, l);
         [r.min, r.max]
     });
-    Rect::enclosing(parts.chain(wires).chain(labels)).map(|r| r.inflate(1.0, 1.0))
+    Rect::enclosing(parts.chain(wires).chain(labels)).map(|r| r.inflate(2.0, 2.0))
 }
 
 impl SchematicEditor {

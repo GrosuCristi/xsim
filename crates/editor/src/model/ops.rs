@@ -193,14 +193,14 @@ mod tests {
     fn placing_assigns_fresh_ids_and_designators() {
         let mut s = Schematic::default();
         let a = place_component(&mut s, resistor(), Point::new(0, 0), Orientation::default());
-        let b = place_component(&mut s, resistor(), Point::new(0, 4), Orientation::default());
+        let b = place_component(&mut s, resistor(), Point::new(0, 8), Orientation::default());
         assert_ne!(a, b);
         let names: Vec<_> = s.components.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["R1", "R2"]);
         let g = place_component(
             &mut s,
             Part::Ground,
-            Point::new(0, 8),
+            Point::new(0, 16),
             Orientation::default(),
         );
         assert_eq!(s.component(g).map(|c| c.name.as_str()), Some("GND1"));
@@ -209,8 +209,8 @@ mod tests {
     #[test]
     fn zero_length_wires_are_not_added() {
         let mut s = Schematic::default();
-        assert!(add_wire(&mut s, vec![Point::new(1, 1), Point::new(1, 1)]).is_none());
-        assert!(add_wire(&mut s, vec![Point::new(1, 1), Point::new(3, 1)]).is_some());
+        assert!(add_wire(&mut s, vec![Point::new(2, 2), Point::new(2, 2)]).is_none());
+        assert!(add_wire(&mut s, vec![Point::new(2, 2), Point::new(6, 2)]).is_some());
         assert_eq!(s.wires.len(), 1);
     }
 
@@ -218,8 +218,8 @@ mod tests {
     fn deleting_removes_only_the_selection() {
         let mut s = Schematic::default();
         let r = place_component(&mut s, resistor(), Point::new(0, 0), Orientation::default());
-        let w = add_wire(&mut s, vec![Point::new(2, 0), Point::new(6, 0)]);
-        let l = add_label(&mut s, "out".into(), Point::new(6, 0));
+        let w = add_wire(&mut s, vec![Point::new(4, 0), Point::new(12, 0)]);
+        let l = add_label(&mut s, "out".into(), Point::new(12, 0));
         let selection: Selection = [ObjectRef::Component(r), ObjectRef::Label(l)]
             .into_iter()
             .collect();
@@ -233,7 +233,7 @@ mod tests {
     fn component_edits_are_validated() {
         let mut s = Schematic::default();
         let r1 = place_component(&mut s, resistor(), Point::new(0, 0), Orientation::default());
-        place_component(&mut s, resistor(), Point::new(0, 4), Orientation::default());
+        place_component(&mut s, resistor(), Point::new(0, 8), Orientation::default());
         assert!(edit_component(&mut s, r1, " ", resistor()).is_err());
         assert!(edit_component(&mut s, r1, "R2", resistor()).is_err());
         assert!(edit_component(&mut s, r1, "R1", Part::default_for(PartKind::Ground)).is_err());

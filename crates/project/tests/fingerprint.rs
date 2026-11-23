@@ -199,7 +199,7 @@ fn every_electrical_edit_changes_the_fingerprint() {
 fn a_drawing_only_change_keeps_the_fingerprint() {
     let before = rc_low_pass_schematic();
     let mut after = before.clone();
-    let shift = |p: &mut xsim_project::Point| *p = xsim_project::Point::new(p.x + 10, p.y - 4);
+    let shift = |p: &mut xsim_project::Point| *p = xsim_project::Point::new(p.x + 20, p.y - 8);
     after
         .components
         .iter_mut()

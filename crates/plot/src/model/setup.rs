@@ -20,8 +20,14 @@
 //! Moving a trace to another pane (D14, [`move_trace`]) keeps its slot
 //! unless the target pane already uses it, and is refused when the target
 //! already plots the expression or would get a third unit (D9).
+//!
+//! Pane heights (D23, [`super::heights`]): a new pane gets the mean weight
+//! of the others, a removed pane leaves the others' weights, and the Bode
+//! layout's panes start equally high. Nothing else here changes a height,
+//! so adapting a stored setup to a result never does unless it adds a pane.
 
 use super::axis::AxisRange;
+use super::heights;
 use super::units::{PaneUnits, expression_unit};
 use xsim_project::{PlotPane, PlotSetup, Trace, YScale};
 use xsim_spice_engine::{AnalysisKind, SimulationResult};
@@ -284,12 +290,14 @@ pub fn add_pane(setup: &mut PlotSetup) -> usize {
     setup.active_pane
 }
 
-/// Appends an empty pane sharing the x axis; returns its index.
+/// Appends an empty pane sharing the x axis, with the mean weight of the
+/// others (D23); returns its index.
 fn push_pane(setup: &mut PlotSetup) -> usize {
     let pane = match setup.panes.first() {
         Some(first) => PlotPane {
             x_range: first.x_range,
             x_log: first.x_log,
+            height: heights::new_pane_height(setup),
             ..PlotPane::default()
         },
         None => PlotPane::default(),
@@ -298,7 +306,9 @@ fn push_pane(setup: &mut PlotSetup) -> usize {
     setup.panes.len() - 1
 }
 
-/// Removes pane `index`; the last remaining pane cannot be removed.
+/// Removes pane `index`; the last remaining pane cannot be removed. The
+/// others keep their weights (D23), so they share its height in
+/// proportion; panes left equally high store no height.
 pub fn remove_pane(setup: &mut PlotSetup, index: usize) -> bool {
     if setup.panes.len() <= 1 || index >= setup.panes.len() {
         return false;
@@ -307,6 +317,7 @@ pub fn remove_pane(setup: &mut PlotSetup, index: usize) -> bool {
     if setup.active_pane >= index && setup.active_pane > 0 {
         setup.active_pane -= 1;
     }
+    heights::tidy(setup);
     true
 }
 
@@ -1048,6 +1059,79 @@ mod tests {
         // a trace dropped there later, of any unit, starts fitted.
         assert_eq!(move_trace(&mut setup, 0, 0, 1), Ok(1));
         assert_eq!(setup.panes[0].y_range, None);
+    }
+
+    fn heights(setup: &PlotSetup) -> Vec<Option<f32>> {
+        setup.panes.iter().map(|p| p.height).collect()
+    }
+
+    /// D23: a new pane takes an average share, a removed pane's height goes
+    /// to the others in proportion, and equally high panes store nothing.
+    #[test]
+    fn panes_added_and_removed_keep_consistent_heights() {
+        let mut setup = PlotSetup::default();
+        add_pane(&mut setup);
+        assert_eq!(heights(&setup), [None, None], "equal panes store nothing");
+        setup.panes[0].height = Some(1.5);
+        setup.panes[1].height = Some(0.5);
+        add_pane(&mut setup);
+        assert_eq!(
+            heights(&setup),
+            [Some(1.5), Some(0.5), None],
+            "the mean is 1"
+        );
+        assert!(remove_pane(&mut setup, 0));
+        assert_eq!(heights(&setup), [Some(0.5), None], "the others keep theirs");
+        add_pane(&mut setup);
+        assert_eq!(heights(&setup), [Some(0.5), None, Some(0.75)]);
+        assert!(remove_pane(&mut setup, 1));
+        assert!(remove_pane(&mut setup, 0));
+        assert_eq!(heights(&setup), [None], "a single pane stores none");
+        // A third unit's new pane gets the mean weight too.
+        let mut setup = PlotSetup::default();
+        add_trace(&mut setup, "V(out)", false);
+        add_trace(&mut setup, "I(R1)", false);
+        setup.panes[0].height = Some(3.0);
+        add_trace(&mut setup, "V(out)*I(R1)", false);
+        assert_eq!(heights(&setup), [Some(3.0), Some(3.0)]);
+    }
+
+    /// D23: moving a trace, changing a scale or a range, or adapting to a
+    /// result leaves the heights alone; the Bode layout starts equal.
+    #[test]
+    fn heights_survive_every_edit_but_a_new_layout() {
+        let mut setup = PlotSetup::default();
+        add_trace(&mut setup, "V(a)", false);
+        add_trace(&mut setup, "V(b)", false);
+        add_pane(&mut setup);
+        setup.panes[0].height = Some(1.6);
+        setup.panes[1].height = Some(0.4);
+        let tran = result(AnalysisKind::Transient, vec![0.0, 1.0]);
+        let stored = heights(&setup);
+        assert_eq!(move_trace(&mut setup, 0, 1, 1), Ok(0));
+        set_y_scale(&mut setup, 1, YScale::Log);
+        set_x_range(&mut setup, Some([0.1, 0.9]));
+        set_active(&mut setup, 0);
+        adapt_to_result(&mut setup, &tran);
+        assert!(!adapt_to_result(&mut setup, &tran));
+        assert_eq!(heights(&setup), stored);
+        // Unusual stored heights are not rewritten either.
+        setup.panes[0].height = Some(1.234_567);
+        setup.panes[1].height = Some(1.234_567);
+        assert!(!adapt_to_result(&mut setup, &tran));
+        assert_eq!(heights(&setup), [Some(1.234_567), Some(1.234_567)]);
+
+        // An AC result builds the Bode layout with equal panes, and an
+        // untouched Bode layout collapses into one pane again.
+        let ac = result(AnalysisKind::Ac, vec![1.0, 10.0]);
+        assert!(adapt_to_result(&mut setup, &ac));
+        assert_eq!(heights(&setup), [None, None]);
+        setup.panes[0].height = Some(1.5);
+        setup.panes[1].height = Some(0.5);
+        assert!(!adapt_to_result(&mut setup, &ac), "resized Bode panes stay");
+        assert_eq!(heights(&setup), [Some(1.5), Some(0.5)]);
+        assert!(adapt_to_result(&mut setup, &tran));
+        assert_eq!(heights(&setup), [None]);
     }
 
     #[test]

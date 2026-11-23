@@ -234,8 +234,10 @@ impl PropertiesView {
             .dropdown_caret(true)
             .disabled(self.read_only)
             .debug_selector(|| "switch-control".into())
+            // A schematic may have more sources than the dialog's window
+            // (D22) is high: the menu scrolls.
             .dropdown_menu(move |menu, _, _| {
-                sources.iter().fold(menu, |menu, source| {
+                sources.iter().fold(menu.scrollable(true), |menu, source| {
                     let (view, chosen) = (view.clone(), source.clone());
                     let (name, selector) = (source.clone(), format!("switch-control-{source}"));
                     menu.item(

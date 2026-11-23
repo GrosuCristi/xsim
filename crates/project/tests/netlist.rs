@@ -35,10 +35,10 @@ fn rc_low_pass_becomes_a_three_element_circuit() {
     for (net, &node) in n.connectivity.nets.iter().zip(&n.net_nodes) {
         assert_eq!(n.circuit.nodes[node], net.name);
     }
-    assert_eq!(n.node_name_at(P(2, 0)), Some("in"));
-    assert_eq!(n.node_name_at(P(12, 2)), Some("out"));
-    assert_eq!(n.node_name_at(P(6, 8)), Some("0"));
-    assert_eq!(n.node_name_at(P(6, 4)), None);
+    assert_eq!(n.node_name_at(P(4, 0)), Some("in"));
+    assert_eq!(n.node_name_at(P(24, 4)), Some("out"));
+    assert_eq!(n.node_name_at(P(12, 16)), Some("0"));
+    assert_eq!(n.node_name_at(P(12, 8)), None);
 }
 
 #[test]
@@ -46,9 +46,9 @@ fn unlabelled_nets_get_automatic_node_names() {
     let mut schematic = rc_low_pass_schematic();
     schematic.labels.clear();
     let n = netlist(&schematic).unwrap();
-    // "in" starts at (0, 0), "out" at (8, 0); ground is "0".
+    // "in" starts at (0, 0), "out" at (16, 0); ground is "0".
     assert_eq!(n.circuit.nodes, ["0", "N001", "N002"]);
-    assert_eq!(n.node_name_at(P(12, 2)), Some("N002"));
+    assert_eq!(n.node_name_at(P(24, 4)), Some("N002"));
 }
 
 #[test]
@@ -76,18 +76,18 @@ fn part_parameters_reach_the_engine_devices() {
             inductance: 4.7e-3,
             initial_current: Some(-1e-3),
         },
-        (4, 0),
+        (8, 0),
         0,
     );
     s.part(
         Part::CurrentSource {
             source: pulse.clone(),
         },
-        (8, 0),
+        (16, 0),
         0,
     );
-    s.ground((-2, 0));
-    s.ground((10, 0));
+    s.ground((-4, 0));
+    s.ground((20, 0));
     let n = netlist(&s.schematic).unwrap();
     let devices: Vec<_> = n
         .circuit
@@ -109,7 +109,7 @@ fn part_parameters_reach_the_engine_devices() {
             Device::CurrentSource(pulse),
         ]
     );
-    // Pins meeting at (2, 0) and (6, 0) connect without wires.
+    // Pins meeting at (4, 0) and (12, 0) connect without wires.
     assert_eq!(n.circuit.nodes, ["0", "N001", "N002"]);
 }
 
@@ -119,12 +119,12 @@ fn a_stray_wire_or_lone_label_does_not_change_the_circuit() {
     let mut s = Sketch {
         schematic: rc_low_pass_schematic(),
     };
-    s.wire(&[(30, 30), (40, 30)]);
-    s.label("nowhere", (50, 50));
+    s.wire(&[(60, 60), (80, 60)]);
+    s.label("nowhere", (100, 100));
     let n = netlist(&s.schematic).unwrap();
     assert_eq!(n.circuit, reference.circuit);
     assert_eq!(n.net_nodes, reference.net_nodes);
-    assert_eq!(n.node_name_at(P(35, 30)), None);
+    assert_eq!(n.node_name_at(P(70, 60)), None);
 }
 
 #[test]
@@ -132,8 +132,8 @@ fn a_schematic_without_parts_is_empty() {
     assert_eq!(netlist(&Default::default()), Err(NetlistError::Empty));
     let mut s = Sketch::new();
     s.ground((0, 0));
-    s.wire(&[(0, 0), (5, 0)]);
-    s.label("x", (5, 0));
+    s.wire(&[(0, 0), (10, 0)]);
+    s.label("x", (10, 0));
     assert_eq!(netlist(&s.schematic), Err(NetlistError::Empty));
 }
 
@@ -141,15 +141,15 @@ fn a_schematic_without_parts_is_empty() {
 fn a_circuit_needs_a_device_on_ground() {
     let mut s = Sketch::new();
     s.resistor((0, 0), 0);
-    s.wire(&[(-2, 0), (-2, 4), (2, 4), (2, 0)]);
+    s.wire(&[(-4, 0), (-4, 8), (4, 8), (4, 0)]);
     assert_eq!(netlist(&s.schematic), Err(NetlistError::NoGround));
     // A ground symbol touching nothing does not count.
-    s.ground((20, 20));
+    s.ground((40, 40));
     assert_eq!(netlist(&s.schematic), Err(NetlistError::NoGround));
     // Neither does a ground on a stray wire.
-    s.wire(&[(20, 20), (25, 20)]);
+    s.wire(&[(40, 40), (50, 40)]);
     assert_eq!(netlist(&s.schematic), Err(NetlistError::NoGround));
-    s.ground((2, 4));
+    s.ground((4, 8));
     assert!(netlist(&s.schematic).is_ok());
 }
 
@@ -157,8 +157,8 @@ fn a_circuit_needs_a_device_on_ground() {
 fn a_label_named_0_grounds_its_net() {
     let mut s = Sketch::new();
     s.resistor((0, 0), 0);
-    s.wire(&[(-2, 0), (-2, 4), (2, 4), (2, 0)]);
-    s.label("0", (0, 4));
+    s.wire(&[(-4, 0), (-4, 8), (4, 8), (4, 0)]);
+    s.label("0", (0, 8));
     let n = netlist(&s.schematic).unwrap();
     assert_eq!(n.circuit.elements[0].nodes, [GROUND, GROUND]);
 }
@@ -168,11 +168,11 @@ fn designators_must_be_unique_among_non_ground_parts() {
     let mut s = Sketch {
         schematic: rc_low_pass_schematic(),
     };
-    let extra = s.ground((0, 10));
+    let extra = s.ground((0, 20));
     s.schematic.component_mut(extra).unwrap().name = "GND1".into();
     // Ground symbols may share a name: they produce no element.
     assert!(netlist(&s.schematic).is_ok());
-    let r2 = s.resistor((20, 0), 0);
+    let r2 = s.resistor((40, 0), 0);
     s.schematic.component_mut(r2).unwrap().name = "C1".into();
     assert_eq!(
         netlist(&s.schematic),
@@ -185,8 +185,8 @@ fn a_pin_touching_nothing_is_unconnected() {
     let mut s = Sketch {
         schematic: rc_low_pass_schematic(),
     };
-    let floating = s.part(Part::default_for(PartKind::VoltageSource), (30, 0), 0);
-    s.wire(&[(28, 0), (28, 8), (12, 8)]); // + pin wired to the ground rail
+    let floating = s.part(Part::default_for(PartKind::VoltageSource), (60, 0), 0);
+    s.wire(&[(56, 0), (56, 16), (24, 16)]); // + pin wired to the ground rail
     assert_eq!(
         netlist(&s.schematic),
         Err(NetlistError::UnconnectedPin {
@@ -195,10 +195,10 @@ fn a_pin_touching_nothing_is_unconnected() {
         })
     );
     // A label on the pin, a wire end or another pin all count as contact.
-    s.label("probe", (32, 0));
+    s.label("probe", (64, 0));
     assert!(netlist(&s.schematic).is_ok());
     s.schematic.labels.pop();
-    s.wire(&[(32, 0), (32, 4)]);
+    s.wire(&[(64, 0), (64, 8)]);
     let n = netlist(&s.schematic).unwrap();
     let index = n.elements[&floating];
     assert_eq!(n.circuit.elements[index].nodes[0], GROUND);
@@ -210,7 +210,7 @@ fn errors_are_reported_in_a_fixed_order() {
     // missing ground.
     let mut s = Sketch::new();
     s.resistor((0, 0), 0);
-    let r2 = s.resistor((10, 0), 0);
+    let r2 = s.resistor((20, 0), 0);
     s.schematic.component_mut(r2).unwrap().name = "R1".into();
     assert_eq!(
         netlist(&s.schematic),
@@ -224,8 +224,8 @@ fn errors_are_reported_in_a_fixed_order() {
             pin: "1".into(),
         })
     );
-    s.wire(&[(-2, 0), (-2, 2), (8, 2), (8, 0)]);
-    s.wire(&[(2, 0), (2, -2), (12, -2), (12, 0)]);
+    s.wire(&[(-4, 0), (-4, 4), (16, 4), (16, 0)]);
+    s.wire(&[(4, 0), (4, -4), (24, -4), (24, 0)]);
     assert_eq!(netlist(&s.schematic), Err(NetlistError::NoGround));
 }
 
@@ -233,8 +233,8 @@ fn errors_are_reported_in_a_fixed_order() {
 fn semiconductor_models_resolve_from_the_library() {
     let mut s = Sketch::new();
     let diode = s.part(Part::default_for(PartKind::Diode), (0, 0), 0);
-    let npn = s.part(Part::default_for(PartKind::NpnBjt), (10, 0), 0);
-    let pjfet = s.part(Part::default_for(PartKind::PJfet), (20, 0), 0);
+    let npn = s.part(Part::default_for(PartKind::NpnBjt), (20, 0), 0);
+    let pjfet = s.part(Part::default_for(PartKind::PJfet), (40, 0), 0);
     // Tie every terminal to ground so the circuit is well formed.
     for id in [diode, npn, pjfet] {
         for pin in s.component(id).pins() {
@@ -277,11 +277,11 @@ fn unknown_or_mismatched_models_are_reported() {
         Part::Diode {
             model: "d_signal".into(), // names are case-sensitive
         },
-        (30, 0),
+        (60, 0),
         0,
     );
-    s.label("0", (28, 0));
-    s.label("0", (32, 0));
+    s.label("0", (56, 0));
+    s.label("0", (64, 0));
     assert_eq!(
         netlist(&s.schematic),
         Err(NetlistError::UnknownModel {

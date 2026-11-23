@@ -24,8 +24,8 @@ pub const HIT_TOLERANCE_PX: f32 = 7.0;
 /// from it in the select tool (D20). Zoomed out, the pixel hit tolerance
 /// covers most of a small part, which must stay movable: a press on the pin
 /// beyond this radius acts on the part, as on its body. It is shorter than
-/// the ground symbol's lead (0.45), so its bars always move it.
-pub const PIN_WIRE_RADIUS: f32 = 0.4;
+/// the ground symbol's lead (0.9), so its bars always move it.
+pub const PIN_WIRE_RADIUS: f32 = 0.8;
 
 /// What the left (or middle) button is doing.
 #[derive(Default)]
@@ -358,8 +358,8 @@ impl SchematicEditor {
         let delta = match drag.plan {
             // The pressed segment lies on a grid line, but the press may be
             // nearer the next line (the hit tolerance exceeds half a unit
-            // when zoomed out): the mouse's own displacement, rounded,
-            // moves it, so it neither jumps at the start nor lags behind.
+            // at most zooms): the mouse's own displacement, rounded, moves
+            // it, so it neither jumps at the start nor lags behind.
             DragPlan::Segment(_) => (pointer.world - drag.press).snapped(),
             // Objects keep their grid offset from the snapped mouse.
             DragPlan::Selection(_) => pointer.world.snapped() - drag.press.snapped(),

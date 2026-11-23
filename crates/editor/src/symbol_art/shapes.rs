@@ -3,6 +3,11 @@
 //! The leads end exactly at the pins of [`xsim_project::symbols::geometry`],
 //! so the drawing and the electrical connections always agree. One list of
 //! shapes serves the canvas, the toolbar icons and the library preview.
+//!
+//! The artwork is designed in schema-2 units, twice the grid unit (D22), and
+//! [`shapes`] scales it by [`ART_SCALE`]: symbols keep their size on screen,
+//! and since the factor is a power of two the leads still end exactly on
+//! the pins.
 
 use crate::model::geometry::{Rect, Vec2};
 use std::f32::consts::PI;
@@ -22,12 +27,46 @@ pub enum Shape {
     Sign { at: Vec2, plus: bool },
 }
 
+/// Grid units per unit of the artwork's design coordinates (schema-2
+/// units, D22).
+const ART_SCALE: f32 = 2.0;
+
+/// Half the length of a `+` or `−` sign's bar, in grid units.
+pub const SIGN_ARM: f32 = 0.2 * ART_SCALE;
+
 const fn v(x: f32, y: f32) -> Vec2 {
     Vec2::new(x, y)
 }
 
-/// The artwork of `kind`.
+/// The artwork of `kind`, in grid units.
 pub fn shapes(kind: PartKind) -> Vec<Shape> {
+    designed(kind)
+        .into_iter()
+        .map(|shape| shape.scaled(ART_SCALE))
+        .collect()
+}
+
+impl Shape {
+    /// The shape with every coordinate and radius multiplied by `factor`.
+    fn scaled(self, factor: f32) -> Shape {
+        let scale = |points: Vec<Vec2>| points.into_iter().map(|p| p * factor).collect();
+        match self {
+            Shape::Line(points) => Shape::Line(scale(points)),
+            Shape::Fill(points) => Shape::Fill(scale(points)),
+            Shape::Circle { center, radius } => Shape::Circle {
+                center: center * factor,
+                radius: radius * factor,
+            },
+            Shape::Sign { at, plus } => Shape::Sign {
+                at: at * factor,
+                plus,
+            },
+        }
+    }
+}
+
+/// The artwork of `kind` in its design coordinates.
+fn designed(kind: PartKind) -> Vec<Shape> {
     match kind {
         PartKind::Resistor => resistor(),
         PartKind::Capacitor => capacitor(),

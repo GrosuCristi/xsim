@@ -81,7 +81,7 @@ fn rich_project() -> Project {
         } else {
             Part::CurrentSource { source }
         };
-        let x = 20 + 6 * i32::try_from(i).unwrap();
+        let x = 40 + 12 * i32::try_from(i).unwrap();
         s.part(part, (x, 0), u8::try_from(i % 4).unwrap());
     }
     for kind in [
@@ -90,7 +90,7 @@ fn rich_project() -> Project {
         PartKind::NJfet,
         PartKind::Inductor,
     ] {
-        let id = s.part(Part::default_for(kind), (0, -20), 2);
+        let id = s.part(Part::default_for(kind), (0, -40), 2);
         s.schematic.component_mut(id).unwrap().orientation = Orientation {
             rotation: 3,
             mirror_x: true,
@@ -102,11 +102,11 @@ fn rich_project() -> Project {
             capacitance: f64::MIN_POSITIVE,
             initial_voltage: Some(-1.5),
         },
-        (-30, -30),
+        (-60, -60),
         0,
     );
-    s.wire(&[(-100_000, 7), (3, 99_999), (-5, -5)]);
-    s.label("bus[0]", (-7, 3));
+    s.wire(&[(-200_000, 14), (6, 199_998), (-10, -10)]);
+    s.label("bus[0]", (-14, 6));
 
     let doc = &mut project.circuits[0];
     doc.name = "Main".into();
@@ -138,6 +138,7 @@ fn rich_project() -> Project {
                 x_log: Some(true),
                 y_scale: YScale::Decibel,
                 y2_range: Some([-2e-3, 2.5e-3]),
+                height: Some(1.0 / 3.0),
             },
             PlotPane::default(),
         ],
@@ -212,20 +213,23 @@ fn round_trip_is_lossless_and_byte_identical() {
     assert_eq!(loaded.project.to_json(), text);
 }
 
-/// D9 and D11 added `PlotPane::y2_range` and `Trace::slot`. Files written
-/// before them have neither key: they load with the defaults and save back
-/// byte-identically, because unset values are not written.
+/// D9, D11 and D23 added `PlotPane::y2_range`, `Trace::slot` and
+/// `PlotPane::height`. Files written before them have none of these keys:
+/// they load with the defaults and save back byte-identically, because
+/// unset values are not written.
 #[test]
-fn files_without_right_axis_ranges_or_trace_slots_round_trip_unchanged() {
+fn files_without_right_axis_ranges_trace_slots_or_pane_heights_round_trip_unchanged() {
     let mut project = rich_project();
     for pane in &mut project.circuits[0].plot.panes {
         pane.y2_range = None;
+        pane.height = None;
         for trace in &mut pane.traces {
             trace.slot = None;
         }
     }
     let text = project.to_json();
     assert!(!text.contains("\"slot\"") && !text.contains("\"y2_range\""));
+    assert!(!text.contains("\"height\""));
     let loaded = Project::from_json(&text).unwrap();
     assert_eq!(loaded.compatibility, Compatibility::Current);
     assert_eq!(loaded.project, project);
@@ -234,11 +238,129 @@ fn files_without_right_axis_ranges_or_trace_slots_round_trip_unchanged() {
     // Set values are written and read back.
     let rich = rich_project().to_json();
     assert!(rich.contains("\"slot\": 3") && rich.contains("\"y2_range\": ["));
-    let pane = &Project::from_json(&rich).unwrap().project.circuits[0]
+    // The height is the last key of its pane; the default pane has none.
+    let height = rich
+        .find("\"height\": 0.33333334\n")
+        .expect("the height is written");
+    assert!(
+        rich[height..]
+            .split('\n')
+            .nth(1)
+            .is_some_and(|l| l.trim() == "},"),
+        "the height is the last key of its pane"
+    );
+    assert_eq!(
+        rich.matches("\"height\"").count(),
+        1,
+        "the default pane has none"
+    );
+    let panes = &Project::from_json(&rich).unwrap().project.circuits[0]
         .plot
-        .panes[0];
+        .panes;
+    let pane = &panes[0];
     assert_eq!(pane.y2_range, Some([-2e-3, 2.5e-3]));
     assert_eq!(pane.traces[1].slot, Some(3));
+    assert_eq!(
+        pane.height,
+        Some(1.0 / 3.0),
+        "the height round-trips exactly"
+    );
+    assert_eq!(panes[1].height, None);
+}
+
+/// Every schema-2 fixture, written before pane heights existed (D23),
+/// opens without heights; resaved in the current format it has no height
+/// keys either.
+#[test]
+fn older_fixtures_have_no_pane_heights() {
+    for text in [
+        include_str!("fixtures/schema2_rc_lowpass.xsim_proj"),
+        include_str!("fixtures/schema2_mixed.xsim_proj"),
+        FIXTURE,
+    ] {
+        let project = Project::from_json(text).unwrap().project;
+        let panes = project.circuits.iter().flat_map(|c| &c.plot.panes);
+        assert!(panes.into_iter().all(|p| p.height.is_none()));
+        assert!(!project.to_json().contains("\"height\""));
+    }
+}
+
+/// A stored pane height is a relative weight (D23): it must be a positive
+/// finite number. A number too small for `f32` reads as zero; one too large
+/// for it is a format error, as for any other `f32` of the file.
+#[test]
+fn pane_heights_must_be_positive_and_finite() {
+    let good = serde_json::to_value(rich_project()).unwrap();
+    for bad in [json!(0.0), json!(-1.0), json!(-0.0), json!(1e-50)] {
+        let mut value = good.clone();
+        value["circuits"][0]["plot"]["panes"][1]["height"] = bad.clone();
+        match load_value(&value) {
+            Err(ProjectError::Invalid(text)) => {
+                assert!(text.contains("plot pane 2 has the height"), "{bad}: {text}");
+                assert!(text.contains("positive finite"), "{bad}: {text}");
+            }
+            other => panic!("{bad}: expected Invalid, got {other:?}"),
+        }
+    }
+    // A height that is not a number, or does not fit `f32`, is a format
+    // error, like any other wrongly typed value of the current schema.
+    for bad in [json!("tall"), json!(1e39)] {
+        let mut value = good.clone();
+        value["circuits"][0]["plot"]["panes"][1]["height"] = bad.clone();
+        let result = load_value(&value);
+        assert!(matches!(result, Err(ProjectError::Format(_))), "{bad}");
+    }
+    // Tiny and huge weights are kept as they are.
+    for fine in [f32::MIN_POSITIVE, 1e-3, 2.5, 1e30] {
+        let mut value = good.clone();
+        value["circuits"][0]["plot"]["panes"][1]["height"] = json!(fine);
+        let project = load_value(&value).unwrap().project;
+        assert_eq!(project.circuits[0].plot.panes[1].height, Some(fine));
+    }
+    // Saving refuses a height the file could not hold.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("heights.xsim_proj");
+    for bad in [0.0, -2.0, f32::INFINITY, f32::NAN] {
+        let mut project = rich_project();
+        project.circuits[0].plot.panes[0].height = Some(bad);
+        let error = project.save(&path).unwrap_err().to_string();
+        assert!(
+            error.contains("plot pane 1 has the height"),
+            "{bad}: {error}"
+        );
+    }
+    assert!(!path.exists());
+}
+
+/// Q45: a newer xsim may store pane heights this version cannot use; the
+/// file still opens (read-only), with those panes at the default height
+/// and the other heights kept.
+#[test]
+fn newer_schemas_drop_unusable_pane_heights() {
+    // Numbers this version cannot use, and values that are not numbers.
+    for bad in [
+        json!(0.0),
+        json!(-3.0),
+        json!(1e39),
+        json!("tall"),
+        json!({"rows": 3}),
+    ] {
+        let mut value = serde_json::to_value(rich_project()).unwrap();
+        value["schema_version"] = json!(SCHEMA_VERSION + 1);
+        value["circuits"][0]["plot"]["panes"][1]["height"] = bad.clone();
+        let loaded = load_value(&value).unwrap_or_else(|e| panic!("{bad}: {e}"));
+        assert_eq!(
+            loaded.compatibility,
+            Compatibility::Newer {
+                version: SCHEMA_VERSION + 1
+            }
+        );
+        let panes = &loaded.project.circuits[0].plot.panes;
+        assert_eq!(panes.len(), 2, "{bad}: the pane is kept");
+        assert_eq!(panes[1].height, None, "{bad}");
+        assert_eq!(panes[0].height, Some(1.0 / 3.0), "{bad}: others are kept");
+        assert_eq!(panes[0].y2_range, Some([-2e-3, 2.5e-3]), "{bad}");
+    }
 }
 
 #[test]
@@ -277,7 +399,7 @@ fn canonical_text_uses_struct_order_two_space_indent_and_lf() {
             "layout"
         ]
     );
-    let r1 = "{\n            \"id\": 2,\n            \"name\": \"R1\",\n            \"position\": {\n              \"x\": 6,\n              \"y\": 0\n            },\n            \"orientation\": {\n              \"rotation\": 0,\n              \"mirror_x\": false,\n              \"mirror_y\": false\n            },\n            \"part\": {\n              \"Resistor\": {\n                \"resistance\": 1000.0\n              }\n            }\n          }";
+    let r1 = "{\n            \"id\": 2,\n            \"name\": \"R1\",\n            \"position\": {\n              \"x\": 12,\n              \"y\": 0\n            },\n            \"orientation\": {\n              \"rotation\": 0,\n              \"mirror_x\": false,\n              \"mirror_y\": false\n            },\n            \"part\": {\n              \"Resistor\": {\n                \"resistance\": 1000.0\n              }\n            }\n          }";
     assert!(text.contains(r1), "{text}");
 }
 
@@ -354,7 +476,7 @@ fn loading_garbage_fails_with_a_clear_error() {
     ));
     for (text, expect_format) in [
         ("not json", true),
-        ("{\"schema_version\": 2", true),
+        ("{\"schema_version\": 3", true),
         ("[1, 2]", false),
         ("{}", false),
         ("{\"name\": \"x\"}", false),
@@ -587,10 +709,10 @@ fn schema1_fixture_migrates_to_the_current_document() {
     assert_eq!(
         summary,
         [
-            (1, "V1", xsim_project::Point::new(0, 4), 1),
-            (2, "R1", xsim_project::Point::new(6, 0), 0),
-            (3, "C1", xsim_project::Point::new(12, 4), 1),
-            (4, "GND1", xsim_project::Point::new(6, 8), 0),
+            (1, "V1", xsim_project::Point::new(0, 8), 1),
+            (2, "R1", xsim_project::Point::new(12, 0), 0),
+            (3, "C1", xsim_project::Point::new(24, 8), 1),
+            (4, "GND1", xsim_project::Point::new(12, 16), 0),
         ]
     );
     assert_eq!(
@@ -627,6 +749,8 @@ fn schema1_fixture_migrates_to_the_current_document() {
     // Plotted node indices and results are dropped.
     assert_eq!(doc.plot.panes, [PlotPane::default()]);
     assert_eq!(doc.result, None);
+    // The prototype stored no view: the default one, fitted on opening.
+    assert_eq!(doc.view, SchematicView::default());
 
     // A migrated project saves and reloads as the current schema.
     let reloaded = Project::from_json(&project.to_json()).unwrap();
@@ -696,6 +820,8 @@ fn schema1_analyses_and_quirks_migrate() {
 
     let doc = &project.circuits[0];
     let component = &doc.schematic.components[0];
+    // Schema-1 coordinates are schema-2 units, doubled on the way (D22).
+    assert_eq!(component.position, xsim_project::Point::new(-6, 4));
     assert_eq!(
         component.orientation,
         Orientation {
@@ -714,7 +840,7 @@ fn schema1_analyses_and_quirks_migrate() {
         doc.schematic.wires[0].points,
         [
             xsim_project::Point::new(0, 0),
-            xsim_project::Point::new(4, 0)
+            xsim_project::Point::new(8, 0)
         ]
     );
     assert_eq!(doc.plot.panes[0].x_range, Some([0.0, 2.0]));

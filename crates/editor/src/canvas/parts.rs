@@ -36,7 +36,7 @@ pub fn paint_part_halos(window: &mut Window, frame: &Frame, scene: &Scene) {
             continue;
         }
         let (a, b) = c.bounds();
-        let r = Rect::from_corners(Vec2::from_grid(a), Vec2::from_grid(b)).inflate(0.35, 0.35);
+        let r = Rect::from_corners(Vec2::from_grid(a), Vec2::from_grid(b)).inflate(0.7, 0.7);
         let (min, max) = (frame.screen(r.min), frame.screen(r.max));
         let (fill, border) = if selected {
             (scene.palette.selection_halo, Some(scene.palette.selection))
@@ -84,7 +84,7 @@ fn paint_open_pins(
     c: &Component,
     color: Hsla,
 ) {
-    let radius = (frame.scale() * 0.16).clamp(2.0, 4.5);
+    let radius = (frame.scale() * 0.32).clamp(2.0, 4.5);
     for (pin, p) in c.pins().into_iter().enumerate() {
         let open = connectivity
             .net_of_pin(c.id, pin)
@@ -101,7 +101,7 @@ fn paint_part_text(window: &mut Window, cx: &mut App, frame: &Frame, c: &Compone
     if c.part.kind() == PartKind::Ground {
         return;
     }
-    let size = (frame.scale() * 0.6).clamp(9.0, 15.0);
+    let size = (frame.scale() * 1.2).clamp(9.0, 15.0);
     let summary = c.part.summary();
     let mut lines = vec![Text {
         content: &c.name,

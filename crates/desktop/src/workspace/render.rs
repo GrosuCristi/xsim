@@ -15,6 +15,7 @@ use xsim_project::appdata::{AppSettings, ThemePreference};
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.reveal_active_tab_once_laid_out(cx);
+        self.reveal_active_tab_when_run_resizes(window, cx);
         window.set_window_title(&window_title(
             &self.doc.project.name,
             self.doc.dirty,

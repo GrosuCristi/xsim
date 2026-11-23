@@ -5,8 +5,14 @@
 //! The header has no axis titles (D20): the tick labels carry the units.
 //! The chips of the left axis's traces start the row, above the left axis;
 //! those of a right axis (D9) end it, set apart by a divider.
+//!
+//! The panes share the stack's height in proportion to their stored
+//! weights (D23), none below [`MIN_PANE_HEIGHT`]; every pane but the first
+//! carries the divider to the pane above it (`super::divider`), which
+//! changes those weights.
 
 use super::canvas::{CursorMark, Overlay, PanePlot};
+use super::divider::divider;
 use super::legend::{DraggedTrace, chips};
 use super::state::{Drag, DropTarget};
 use crate::WaveformViewer;
@@ -23,8 +29,10 @@ use xsim_project::YScale;
 
 /// Height of a pane header, in rems (Q30).
 const HEADER_HEIGHT: f32 = 1.875;
-/// The smallest pane height, in rems.
-const MIN_PANE_HEIGHT: f32 = 7.5;
+/// The smallest pane height, in rems: room for the legend row, a plot
+/// with a few labelled y ticks, and the x tick labels under it. A divider
+/// drag stops there, and with more panes than fit at it the stack scrolls.
+pub const MIN_PANE_HEIGHT: f32 = 7.5;
 /// Width of the bar left of the active pane's header, in pixels.
 const ACTIVE_MARK: f32 = 2.0;
 
@@ -39,11 +47,13 @@ pub struct PaneLayout {
     pub count: usize,
 }
 
-/// Pane `index` with its header and canvas.
+/// Pane `index` with its header and canvas, taking `grow` shares of the
+/// stack's height (D23).
 pub fn pane(
     viewer: &WaveformViewer,
     index: usize,
     layout: PaneLayout,
+    grow: f32,
     cx: &mut Context<WaveformViewer>,
 ) -> AnyElement {
     let theme = cx.theme().clone();
@@ -54,14 +64,26 @@ pub fn pane(
         .debug_selector(move || format!("pane-{index}"))
         .relative()
         .flex_1()
+        .flex_grow(grow)
         .min_h(rems(MIN_PANE_HEIGHT))
         .when(!last, |el| el.border_b_1().border_color(theme.border))
         .child(header(viewer, index, layout, cx))
         .child(canvas_area(viewer, index, layout, cx))
         .when_some(drop, |el, target| el.child(drop_highlight(target, cx)))
+        // Last, so it lies above the pane above's plot and this header. Not
+        // while a legend chip is dragged: the band hides both panes from the
+        // pointer, so a chip dropped on it would be lost (D14).
+        .when(index > 0 && !cx.has_active_drag(), |el| {
+            el.child(divider(viewer, index - 1, cx))
+        })
         .on_drag_move(
             cx.listener(move |this, event: &DragMoveEvent<DraggedTrace>, _, cx| {
-                let inside = event.bounds.contains(&event.event.position);
+                // `bounds` is the whole pane, also where the scrolled stack
+                // hides it under the toolbar, the readout or the plus; only
+                // the part in view takes the chip, as only it takes the drop.
+                let position = event.event.position;
+                let inside = event.bounds.contains(&position)
+                    && this.view.panes_scroll.bounds().contains(&position);
                 this.drag_over_pane(index, event.drag(cx).clone(), inside, cx);
             }),
         )
@@ -124,6 +146,7 @@ fn header(
     // that axis (D9).
     h_flex()
         .id(("pane-header", index))
+        .debug_selector(move || format!("pane-header-{index}"))
         .h(rems(HEADER_HEIGHT))
         .flex_shrink_0()
         .pl(px((layout.left - ACTIVE_MARK).max(0.0)))
@@ -271,7 +294,11 @@ fn canvas_area(
                 this.hover_end(index, cx);
             }
         }))
-        .on_scroll(cx.listener(move |this, e, _, cx| this.scroll(index, e, cx)))
+        .on_scroll(cx.listener(move |this, e, _, cx| {
+            this.scroll(index, e, cx);
+            // The wheel over a plot zooms; it never also scrolls the stack.
+            cx.stop_propagation();
+        }))
 }
 
 pub(super) fn plot(
@@ -311,7 +338,9 @@ pub(crate) fn overlay(viewer: &WaveformViewer, index: usize) -> Overlay {
             x: point.x,
         })
         .collect();
-    let crosshair = viewer.view.hover.and_then(|hover| {
+    // No hover line while a divider is dragged: the pointer is resizing.
+    let resizing = matches!(viewer.view.drag, Some(Drag::Divider { .. }));
+    let crosshair = viewer.view.hover.filter(|_| !resizing).and_then(|hover| {
         let geometry = viewer.view.pane_geometry(hover.pane)?;
         geometry
             .plot
@@ -334,8 +363,9 @@ pub(crate) fn overlay(viewer: &WaveformViewer, index: usize) -> Overlay {
 }
 
 /// The mouse pointer over pane `index`: a hand while panning, a left-right
-/// arrow over (or while dragging) a cursor line, a crosshair for the
-/// magnifier's box, and the arrow otherwise.
+/// arrow over (or while dragging) a cursor line, an up-down arrow while a
+/// divider is dragged (D23), a crosshair for the magnifier's box, and the
+/// arrow otherwise.
 pub(crate) fn pointer_style(viewer: &WaveformViewer, index: usize) -> CursorStyle {
     let over_line = || {
         let hover = viewer.view.hover.filter(|h| h.pane == index)?;
@@ -345,6 +375,7 @@ pub(crate) fn pointer_style(viewer: &WaveformViewer, index: usize) -> CursorStyl
         Some(Drag::Pan { .. }) => CursorStyle::ClosedHand,
         Some(Drag::Cursor(_)) => CursorStyle::ResizeLeftRight,
         Some(Drag::Zoom { .. }) => CursorStyle::Crosshair,
+        Some(Drag::Divider { .. }) => CursorStyle::ResizeRow,
         _ if viewer.view.space_held => CursorStyle::OpenHand,
         _ if over_line().is_some() => CursorStyle::ResizeLeftRight,
         _ if viewer.view.magnifier => CursorStyle::Crosshair,
@@ -378,6 +409,7 @@ impl WaveformViewer {
         };
         self.cursor_traces_after_pane_removal(index);
         self.view.geometry.borrow_mut().clear();
+        self.view.divider_hover = None;
         self.edit_setup(cx, |s| setup::remove_pane(s, index));
     }
 
@@ -409,7 +441,10 @@ impl WaveformViewer {
             None if current.is_some_and(|t| t.pane == index) => None,
             None => current,
         };
-        if next != current {
+        // The dividers make way for the chip (D23), and so does their grip:
+        // a band left out while hovered never hears that the pointer left.
+        let unhovered = self.view.divider_hover.take().is_some();
+        if next != current || unhovered {
             self.view.drop_target = next;
             cx.notify();
         }
@@ -476,11 +511,13 @@ impl WaveformViewer {
         }
     }
 
-    /// Adds an empty pane below the others and makes it active.
+    /// Adds an empty pane below the others and makes it active. When the
+    /// stack scrolls, the new pane is scrolled into view (D22).
     pub(crate) fn add_pane(&mut self, cx: &mut Context<Self>) {
         self.edit_setup(cx, |s| {
             setup::add_pane(s);
             true
         });
+        self.view.panes_scroll.scroll_to_bottom();
     }
 }

@@ -13,7 +13,7 @@ fn screen_points(frame: &Frame, wire: &Wire) -> Vec<Vec2> {
 
 /// Translucent halos under selected, hovered and probed wires.
 pub fn paint_wire_halos(window: &mut Window, frame: &Frame, scene: &Scene) {
-    let width = (frame.scale() * 0.55).clamp(7.0, 16.0);
+    let width = (frame.scale() * 1.1).clamp(7.0, 16.0);
     for wire in &scene.schematic.wires {
         let object = ObjectRef::Wire(wire.id);
         let color = if scene.selection.contains(object) {
@@ -59,7 +59,7 @@ pub fn paint_net_highlight(window: &mut Window, frame: &Frame, scene: &Scene) {
     let Some(net) = &scene.net_highlight else {
         return;
     };
-    let radius = (frame.scale() * 0.32).clamp(4.0, 9.0);
+    let radius = (frame.scale() * 0.64).clamp(4.0, 9.0);
     for &p in &net.points {
         disc(window, frame.grid(p), radius, scene.palette.probe_halo);
     }

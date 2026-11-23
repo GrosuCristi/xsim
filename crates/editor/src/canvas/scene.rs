@@ -80,23 +80,24 @@ impl Frame {
         self.screen(Vec2::from_grid(p))
     }
 
-    /// Pixels per grid unit.
+    /// Pixels per grid unit. Sizes on the canvas are fractions of a grid
+    /// unit, the dot pitch (D22): a two-pin part is eight units long.
     pub fn scale(&self) -> f32 {
         self.camera.scale(&self.viewport)
     }
 
     /// Wire pen width in pixels.
     pub fn wire_width(&self) -> f32 {
-        (self.scale() * 0.1).clamp(1.4, 3.0)
+        (self.scale() * 0.2).clamp(1.4, 3.0)
     }
 
     /// Junction dot radius in pixels.
     pub fn junction_radius(&self) -> f32 {
-        (self.scale() * 0.2).clamp(2.6, 6.0)
+        (self.scale() * 0.4).clamp(2.6, 6.0)
     }
 
     /// Whether text is large enough to be worth drawing.
     pub fn shows_text(&self) -> bool {
-        self.scale() >= 7.0
+        self.scale() >= 3.5
     }
 }

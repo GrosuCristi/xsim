@@ -12,21 +12,20 @@
 use super::tests::leave_crashed_session;
 use crate::actions::*;
 use crate::test_support::{
-    TestEnv, click, close, init, long_run_project, open, press, rc_project, wait_until,
+    TestEnv, click, close, dialog, has_dialog, init, long_run_project, open, press,
+    press_in_dialog, rc_project, wait_until,
 };
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{
     Background, Bounds, Hsla, Modifiers, Pixels, ScaledPixels, TestAppContext, VisualTestContext,
+    px,
 };
 use std::time::Duration;
 use xsim_project::{Component, Part, PartKind, Point as GridPoint};
 
-/// The surface of the first dialog open.
+/// The surface of a dialog, in its window (D22).
 const DIALOG: &str = "dialog-0";
-
-/// The surface of a dialog opened over the first.
-const STACKED_DIALOG: &str = "dialog-1";
 
 /// Lets the clock run well past every kit transition and paints a fresh
 /// frame: the test window repaints only when something marks it dirty.
@@ -71,26 +70,25 @@ fn assert_opened_at_rest(
     first
 }
 
-/// No dialog is painted any more, not even one fading out, and none is
-/// left to finish closing.
+/// No dialog window is left over `window`, not even one fading out.
 fn assert_dialog_gone(what: &str, window: &mut VisualTestContext) {
-    assert!(
-        window.debug_bounds("dialog-layer").is_none(),
-        "{what}: a dialog is still painted"
-    );
-    assert!(
-        !window.update(|window, cx| window.has_active_dialog(cx)),
-        "{what}: a dialog is still open"
-    );
+    assert!(!has_dialog(window), "{what}: a dialog is still open");
+    let dialogs = window.cx.read(|app| {
+        app.windows()
+            .into_iter()
+            .filter(|w| xsim_editor::dialog_window::owner_of(*w, app).is_some())
+            .count()
+    });
+    assert_eq!(dialogs, 0, "{what}: a dialog window is left");
 }
 
-/// Closes the open dialog with a click on `selector`, or with the key it
-/// names: Escape, or Enter, which goes through the kit's confirmation and
-/// its own way of closing.
-fn close_with(selector: &'static str, window: &mut VisualTestContext) {
+/// Closes the dialog window `dialog` with a click on `selector`, or with
+/// the key it names: Escape, or Enter, which goes through the dialog's
+/// confirmation.
+fn close_with(selector: &'static str, dialog: &mut VisualTestContext) {
     match selector {
-        "escape" | "enter" => press(selector, window),
-        _ => click(selector, window),
+        "escape" | "enter" => press_in_dialog(selector, dialog),
+        _ => click(selector, dialog),
     }
 }
 
@@ -108,8 +106,9 @@ fn the_analysis_settings_open_and_close_at_once(cx: &mut TestAppContext) {
     ] {
         window.dispatch_action(OpenAnalysisSettings);
         window.run_until_parked();
-        assert_opened_at_rest(DIALOG, "analysis settings", &mut window);
-        close_with(closer, &mut window);
+        let mut settings = dialog(&window);
+        assert_opened_at_rest(DIALOG, "analysis settings", &mut settings);
+        close_with(closer, &mut settings);
         assert_dialog_gone(how, &mut window);
     }
     close(&mut window);
@@ -127,8 +126,9 @@ fn the_settings_open_and_close_at_once(cx: &mut TestAppContext) {
     ] {
         window.dispatch_action(OpenSettings);
         window.run_until_parked();
-        assert_opened_at_rest(DIALOG, "settings", &mut window);
-        close_with(closer, &mut window);
+        let mut settings = dialog(&window);
+        assert_opened_at_rest(DIALOG, "settings", &mut settings);
+        close_with(closer, &mut settings);
         assert_dialog_gone(how, &mut window);
     }
     close(&mut window);
@@ -142,8 +142,9 @@ fn the_recovery_dialog_opens_and_closes_at_once(cx: &mut TestAppContext) {
     window.dispatch_action(NewCircuit);
     leave_crashed_session(&env, &mut window);
     let (_, mut second) = open(cx, &env, None);
-    assert_opened_at_rest(DIALOG, "recovery", &mut second);
-    click("recovery-later", &mut second);
+    let mut recovery = dialog(&second);
+    assert_opened_at_rest(DIALOG, "recovery", &mut recovery);
+    click("recovery-later", &mut recovery);
     assert_dialog_gone("Decide later", &mut second);
     close(&mut second);
     close(&mut window);
@@ -166,8 +167,9 @@ fn the_part_properties_open_and_close_at_once(cx: &mut TestAppContext) {
         window
             .update(|window, cx| xsim_editor::properties::open_properties(&editor, 2, window, cx));
         window.run_until_parked();
-        assert_opened_at_rest(DIALOG, "part properties", &mut window);
-        close_with(closer, &mut window);
+        let mut properties = dialog(&window);
+        assert_opened_at_rest(DIALOG, "part properties", &mut properties);
+        close_with(closer, &mut properties);
         assert_dialog_gone(how, &mut window);
     }
     close(&mut window);
@@ -180,15 +182,16 @@ fn the_component_library_opens_and_closes_at_once(cx: &mut TestAppContext) {
     let (_, mut window) = open(cx, &env, None);
     // The schematic has the keyboard; P opens the library.
     press("p", &mut window);
-    assert_opened_at_rest(DIALOG, "component library", &mut window);
-    press("escape", &mut window);
+    let mut library = dialog(&window);
+    assert_opened_at_rest(DIALOG, "component library", &mut library);
+    press_in_dialog("escape", &mut library);
     assert_dialog_gone("Escape", &mut window);
     close(&mut window);
 }
 
 /// The model library opened from the part properties is a second dialog
-/// over the first. It opens and closes at once, and the properties below
-/// neither move nor play their entrance again.
+/// window over the first. It opens and closes at once, and the properties
+/// below neither move nor play their entrance again.
 #[gpui_kit::test]
 fn the_model_library_over_the_part_properties_opens_and_closes_at_once(cx: &mut TestAppContext) {
     init(cx);
@@ -199,7 +202,7 @@ fn the_model_library_over_the_part_properties_opens_and_closes_at_once(cx: &mut 
     schematic.components.push(Component {
         id: transistor,
         name: "Q1".into(),
-        position: GridPoint::new(16, 0),
+        position: GridPoint::new(32, 0),
         orientation: Default::default(),
         part: Part::default_for(PartKind::PnpBjt),
     });
@@ -210,25 +213,24 @@ fn the_model_library_over_the_part_properties_opens_and_closes_at_once(cx: &mut 
         xsim_editor::properties::open_properties(&editor, transistor, window, cx)
     });
     window.run_until_parked();
-    let properties = assert_opened_at_rest(DIALOG, "part properties", &mut window);
+    let mut form = dialog(&window);
+    let properties = assert_opened_at_rest(DIALOG, "part properties", &mut form);
 
-    click("choose-model", &mut window);
-    assert_opened_at_rest(STACKED_DIALOG, "model library", &mut window);
+    click("choose-model", &mut form);
+    let mut library = dialog(&window);
+    assert_opened_at_rest(DIALOG, "model library", &mut library);
     assert_eq!(
-        window.debug_bounds(DIALOG),
+        form.debug_bounds(DIALOG),
         Some(properties),
         "the properties moved under the library"
     );
-    press("escape", &mut window);
-    assert!(
-        window.debug_bounds(STACKED_DIALOG).is_none(),
-        "the library is gone on the first frame"
-    );
+    press_in_dialog("escape", &mut library);
+    assert_eq!(window.windows().len(), 2, "the library is gone at once");
     assert_eq!(
-        assert_opened_at_rest(DIALOG, "the properties left open", &mut window),
+        assert_opened_at_rest(DIALOG, "the properties left open", &mut form),
         properties
     );
-    press("escape", &mut window);
+    press_in_dialog("escape", &mut form);
     assert_dialog_gone("Escape", &mut window);
     close(&mut window);
 }
@@ -299,9 +301,11 @@ fn added(before: &Painted, now: Painted) -> Painted {
 }
 
 /// A menu opened from `trigger` since `before` was painted: on its first
-/// frame it is painted below the trigger, and from then on it neither
-/// moves nor fades, and stops asking for frames after at most one more.
-/// Returns the bounds of its surface, the largest quad it added.
+/// frame it is painted inside its window, below the trigger where the
+/// window has room for it (a menu in a dialog window, D22, may have to
+/// cover its trigger instead), and from then on it neither moves nor fades,
+/// and stops asking for frames after at most one more. Returns the bounds
+/// of its surface, the largest quad it added.
 fn assert_menu_opened_at_rest(
     trigger: &'static str,
     before: &Painted,
@@ -315,14 +319,22 @@ fn assert_menu_opened_at_rest(
         .map(|quad| quad.0)
         .max_by(|a, b| area(a).total_cmp(&area(b)))
         .unwrap_or_else(|| panic!("{trigger}: no menu on its first frame"));
-    let scale = window.update(|window, _| window.scale_factor());
+    let (scale, viewport) =
+        window.update(|window, _| (window.scale_factor(), window.viewport_size()));
+    let viewport = Bounds::new(gpui_kit::point(px(0.), px(0.)), viewport).scale(scale);
     let trigger_bounds = window
         .debug_bounds(trigger)
         .unwrap_or_else(|| panic!("{trigger} is not on screen"))
         .scale(scale);
+    let below = surface.origin.y >= trigger_bounds.bottom() - ScaledPixels(1.);
+    let room_below = viewport.bottom() - trigger_bounds.bottom();
     assert!(
-        surface.origin.y >= trigger_bounds.bottom() - ScaledPixels(1.),
+        below || surface.size.height > room_below,
         "{trigger}: the largest new quad {surface:?} is not a menu below {trigger_bounds:?}"
+    );
+    assert!(
+        surface.top() >= viewport.top() && surface.bottom() <= viewport.bottom(),
+        "{trigger}: the menu {surface:?} leaves its window {viewport:?}"
     );
     for frame in 1..=3 {
         let asked = window.update(|window, cx| window.simulate_next_frame(cx));
@@ -376,19 +388,22 @@ fn menus_open_and_close_at_once(cx: &mut TestAppContext) {
 
     window.dispatch_action(OpenSettings);
     window.run_until_parked();
+    let mut settings = dialog(&window);
     // Light, Dark, then the interface scale.
     for _ in 0..3 {
-        press("tab", &mut window);
+        press("tab", &mut settings);
     }
-    let dialog = window.debug_bounds(DIALOG).expect("the settings are open");
-    let before = painted(&mut window);
-    press("enter", &mut window);
-    let surface = assert_menu_opened_at_rest("ui-scale", &before, &mut window);
-    press("escape", &mut window);
-    assert_menu_gone("ui-scale", surface, &mut window);
+    let surface_before = settings
+        .debug_bounds(DIALOG)
+        .expect("the settings are open");
+    let before = painted(&mut settings);
+    press("enter", &mut settings);
+    let surface = assert_menu_opened_at_rest("ui-scale", &before, &mut settings);
+    press("escape", &mut settings);
+    assert_menu_gone("ui-scale", surface, &mut settings);
     assert_eq!(
-        window.debug_bounds(DIALOG),
-        Some(dialog),
+        settings.debug_bounds(DIALOG),
+        Some(surface_before),
         "the settings stay as they were"
     );
     close(&mut window);

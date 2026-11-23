@@ -11,11 +11,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use xsim_project::{Point as GridPoint, Schematic, SchematicView};
 
-/// A camera every test can rely on: origin centred, 20 px per grid unit.
+/// A camera every test can rely on: origin centred, 10 px per grid unit
+/// (the default zoom, a dot every 10 px).
 pub fn fixed_view() -> SchematicView {
     SchematicView {
         center: [0.0, 0.0],
-        zoom: 20.0,
+        zoom: 10.0,
         user_set: true,
     }
 }

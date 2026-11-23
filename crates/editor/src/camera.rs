@@ -3,18 +3,20 @@
 //! Pure maths on [`Vec2`]; the canvas converts to GPUI pixels at the edge.
 //! Zoom is stored as pixels per grid unit at UI scale 1 (as in
 //! [`SchematicView`]), so the drawing scales with the UI scale setting (Q30).
+//! A grid unit is the dot pitch, half the schema-2 unit (D22): every limit
+//! here is the schema-2 one converted, so the same pictures are reachable.
 
 use crate::model::geometry::{Rect, Vec2};
 use xsim_project::SchematicView;
 
 /// Smallest zoom, in pixels per grid unit at UI scale 1.
-pub const MIN_ZOOM: f32 = 3.0;
+pub const MIN_ZOOM: f32 = 1.5;
 /// Largest zoom, in pixels per grid unit at UI scale 1.
-pub const MAX_ZOOM: f32 = 120.0;
+pub const MAX_ZOOM: f32 = 60.0;
 /// Fitting never zooms in further than this, so tiny circuits stay readable.
-const FIT_MAX_ZOOM: f32 = 36.0;
+const FIT_MAX_ZOOM: f32 = 18.0;
 /// Margin around the drawing when fitting, in grid units.
-const FIT_MARGIN: f32 = 3.0;
+const FIT_MARGIN: f32 = 6.0;
 
 /// The canvas rectangle on screen.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,39 +141,40 @@ fn sanitize_zoom(zoom: f32) -> f32 {
     }
 }
 
-/// Minimum screen distance between half-unit grid dots, in pixels. They
-/// show from 14 pixels per grid unit up, which includes the default zoom at
-/// every interface scale from 75 % (D14).
-pub const MIN_HALF_DOT_SPACING: f32 = 7.0;
+/// Minimum screen distance between dots on every grid unit, in pixels. They
+/// show from 7 pixels per grid unit up, which includes the default zoom at
+/// every interface scale from 75 % (D14, D22).
+pub const MIN_FINE_DOT_SPACING: f32 = 7.0;
 
-/// Minimum screen distance between whole-unit and coarser grid dots, in
-/// pixels: the thinning the grid had before the half-unit dots.
+/// Minimum screen distance between dots once the grid has thinned out, in
+/// pixels.
 pub const MIN_DOT_SPACING: f32 = 9.0;
 
-/// Pitches of the dot grid coarser than half a unit, in half grid units:
-/// 1, 2, 5, 10, 20, 50 and 100 grid units.
+/// Pitches of the thinned-out dot grid, in grid units: 2, 4, 10, 20, 40, 100
+/// and 200 units, the 1-2-5 steps of the schema-2 unit the grid thinned to
+/// before D22, so zooming out shows the same dots as before.
 const COARSE_DOT_STEPS: [i32; 7] = [2, 4, 10, 20, 40, 100, 200];
 
-/// Half grid units between drawn dots (1 = a dot every half unit) at
-/// `pixels_per_unit` screen pixels per grid unit. The grid is drawn twice as
-/// dense as it snaps while half-unit dots stay [`MIN_HALF_DOT_SPACING`]
-/// apart, then thins out 1-2-5 style keeping dots [`MIN_DOT_SPACING`]
+/// Grid units between drawn dots at `pixels_per_unit` screen pixels per
+/// grid unit. While dots stay [`MIN_FINE_DOT_SPACING`] apart there is one
+/// on every grid unit, which is every point parts, wires and labels snap to
+/// (D22); further out the grid thins out keeping dots [`MIN_DOT_SPACING`]
 /// apart. The thresholds are screen pixels, like the dots themselves.
 pub fn dot_step(pixels_per_unit: f32) -> i32 {
-    if 0.5 * pixels_per_unit >= MIN_HALF_DOT_SPACING {
+    if pixels_per_unit >= MIN_FINE_DOT_SPACING {
         return 1;
     }
     let coarsest = COARSE_DOT_STEPS[COARSE_DOT_STEPS.len() - 1];
     COARSE_DOT_STEPS
         .into_iter()
-        .find(|&step| step as f32 * 0.5 * pixels_per_unit >= MIN_DOT_SPACING)
+        .find(|&step| step as f32 * pixels_per_unit >= MIN_DOT_SPACING)
         .unwrap_or(coarsest)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Camera, MAX_ZOOM, MIN_DOT_SPACING, MIN_HALF_DOT_SPACING, MIN_ZOOM, Viewport, dot_step,
+        Camera, MAX_ZOOM, MIN_DOT_SPACING, MIN_FINE_DOT_SPACING, MIN_ZOOM, Viewport, dot_step,
     };
     use crate::model::geometry::{Rect, Vec2};
     use xsim_project::SchematicView;
@@ -191,11 +194,11 @@ mod tests {
     #[test]
     fn screen_and_world_round_trip() {
         let camera = Camera {
-            center: Vec2::new(4.5, -2.0),
-            zoom: 14.0,
+            center: Vec2::new(9.0, -4.0),
+            zoom: 7.0,
         };
         let vp = viewport();
-        let world = Vec2::new(-10.0, 15.0);
+        let world = Vec2::new(-20.0, 30.0);
         assert!(close(
             camera.to_world(&vp, camera.to_screen(&vp, world)),
             world
@@ -207,7 +210,7 @@ mod tests {
     fn zooming_keeps_the_point_under_the_cursor() {
         let camera = Camera {
             center: Vec2::new(0.0, 0.0),
-            zoom: 20.0,
+            zoom: 10.0,
         };
         let vp = viewport();
         let cursor = Vec2::new(180.0, 90.0);
@@ -222,10 +225,10 @@ mod tests {
     fn panning_moves_content_with_the_mouse() {
         let camera = Camera {
             center: Vec2::new(0.0, 0.0),
-            zoom: 10.0,
+            zoom: 5.0,
         };
         let vp = viewport();
-        let world = Vec2::new(3.0, 3.0);
+        let world = Vec2::new(6.0, 6.0);
         let before = camera.to_screen(&vp, world);
         let panned = camera.panned(&vp, Vec2::new(25.0, -10.0));
         assert!(close(
@@ -237,12 +240,42 @@ mod tests {
     #[test]
     fn fitting_shows_the_whole_extent() {
         let vp = viewport();
-        let extent = Rect::from_corners(Vec2::new(-20.0, -5.0), Vec2::new(40.0, 10.0));
+        let extent = Rect::from_corners(Vec2::new(-40.0, -10.0), Vec2::new(80.0, 20.0));
         let camera = Camera::fit(Some(extent), &vp);
         let visible = camera.visible(&vp);
         assert!(visible.contains_rect(extent));
         assert_eq!(camera.center, extent.center());
         assert_eq!(Camera::fit(None, &vp).zoom, SchematicView::default().zoom);
+    }
+
+    /// D22 halved the grid unit: a drawing fits exactly as large on screen
+    /// as its schema-2 original did, the same margin around it included.
+    #[test]
+    fn fitting_frames_a_drawing_as_before_the_finer_grid() {
+        let vp = viewport();
+        for (min, max) in [
+            (Vec2::new(-40.0, -10.0), Vec2::new(80.0, 20.0)),
+            (Vec2::new(0.0, 0.0), Vec2::new(8.0, 0.0)),
+            (Vec2::new(-400.0, -300.0), Vec2::new(400.0, 300.0)),
+            (Vec2::new(-4000.0, 0.0), Vec2::new(4000.0, 16.0)),
+        ] {
+            let camera = Camera::fit(Some(Rect::from_corners(min, max)), &vp);
+            // Schema 2: half the coordinates, a 3-unit margin, zoom 3 to 36.
+            let (w, h) = ((max.x - min.x) / 2.0 + 6.0, (max.y - min.y) / 2.0 + 6.0);
+            let old = ((vp.size.x / w).min(vp.size.y / h) / vp.ui_scale).clamp(3.0, 36.0);
+            assert!(
+                (camera.zoom * 2.0 - old).abs() < 1e-4,
+                "{min:?}–{max:?}: {} vs {old}",
+                camera.zoom
+            );
+        }
+    }
+
+    #[test]
+    fn the_zoom_range_is_the_schema2_range_in_finer_units() {
+        // 3 to 120 pixels per schema-2 unit, 20 by default.
+        assert_eq!((MIN_ZOOM * 2.0, MAX_ZOOM * 2.0), (3.0, 120.0));
+        assert_eq!(SchematicView::default().zoom * 2.0, 20.0);
     }
 
     #[test]
@@ -254,9 +287,13 @@ mod tests {
         assert_eq!(Camera::from(view).zoom, SchematicView::default().zoom);
     }
 
-    /// The grid before D14, in whole grid units: 1, 2, 5, 10, ... keeping
-    /// dots at least 9 px apart.
-    fn whole_unit_dot_step(pixels_per_unit: f32) -> i32 {
+    /// The thinning before D22, in half schema-2 units at `pixels_per_unit`
+    /// pixels per schema-2 unit: a dot every half unit down to 7 px apart,
+    /// then every 1, 2, 5, 10, ... units keeping dots at least 9 px apart.
+    fn schema2_dot_step(pixels_per_unit: f32) -> i32 {
+        if 0.5 * pixels_per_unit >= 7.0 {
+            return 1;
+        }
         let mut step = 1;
         for next in [2, 5, 10, 20, 50, 100] {
             if step as f32 * pixels_per_unit >= 9.0 {
@@ -264,36 +301,31 @@ mod tests {
             }
             step = next;
         }
-        step
+        2 * step
     }
 
     #[test]
-    fn dots_are_half_a_unit_apart_until_they_get_too_close() {
-        assert_eq!(dot_step(20.0), 1, "10 px apart: every half unit");
-        assert_eq!(dot_step(14.0), 1, "exactly the half-unit minimum");
-        assert_eq!(dot_step(13.9), 2, "every unit");
-        assert_eq!(dot_step(9.0), 2, "exactly the whole-unit minimum");
-        assert_eq!(dot_step(8.9), 4, "every 2 units");
-        assert_eq!(dot_step(5.0), 4);
-        assert_eq!(dot_step(1.0), 20, "every 10 units");
-        assert_eq!(dot_step(0.01), 200, "the coarsest pitch");
+    fn there_is_a_dot_on_every_unit_until_they_get_too_close() {
+        assert_eq!(dot_step(10.0), 1, "10 px apart: every unit");
+        assert_eq!(dot_step(7.0), 1, "exactly the fine minimum");
+        assert_eq!(dot_step(6.95), 2, "every 2 units");
+        assert_eq!(dot_step(4.5), 2, "exactly the coarse minimum");
+        assert_eq!(dot_step(4.45), 4, "every 4 units");
+        assert_eq!(dot_step(2.5), 4);
+        assert_eq!(dot_step(0.5), 20, "every 20 units");
+        assert_eq!(dot_step(0.005), 200, "the coarsest pitch");
         assert_eq!(dot_step(f32::NAN), 200);
     }
 
     #[test]
-    fn only_the_half_unit_dots_are_new() {
-        let mut pixels_per_unit = 0.5;
+    fn the_dots_are_the_ones_drawn_before_the_finer_grid() {
+        let mut pixels_per_unit = 0.25;
         while pixels_per_unit <= 2.0 * MAX_ZOOM {
-            let step = dot_step(pixels_per_unit);
-            if pixels_per_unit >= 2.0 * MIN_HALF_DOT_SPACING {
-                assert_eq!(step, 1, "{pixels_per_unit} px per unit");
-            } else {
-                assert_eq!(
-                    step,
-                    2 * whole_unit_dot_step(pixels_per_unit),
-                    "{pixels_per_unit} px per unit: the old thinning"
-                );
-            }
+            assert_eq!(
+                dot_step(pixels_per_unit),
+                schema2_dot_step(2.0 * pixels_per_unit),
+                "{pixels_per_unit} px per unit"
+            );
             pixels_per_unit *= 1.01;
         }
     }
@@ -304,10 +336,10 @@ mod tests {
         let mut pixels_per_unit = 2.0 * MAX_ZOOM;
         while pixels_per_unit >= MIN_ZOOM * 0.25 {
             let step = dot_step(pixels_per_unit);
-            let spacing = step as f32 * 0.5 * pixels_per_unit;
+            let spacing = step as f32 * pixels_per_unit;
             assert!(step >= previous, "{pixels_per_unit}: {step} < {previous}");
             assert!(
-                spacing >= MIN_HALF_DOT_SPACING,
+                spacing >= MIN_FINE_DOT_SPACING,
                 "{pixels_per_unit}: crowded"
             );
             assert!(step == 1 || spacing >= MIN_DOT_SPACING, "{pixels_per_unit}");

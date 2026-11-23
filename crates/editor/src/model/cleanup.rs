@@ -259,68 +259,68 @@ mod tests {
     #[test]
     fn removes_zero_length_segments_and_merges_collinear_vertices() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(0, 0), (0, 0), (2, 0), (5, 0), (5, 3)])],
+            wires: vec![wire(1, &[(0, 0), (0, 0), (4, 0), (10, 0), (10, 6)])],
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(0, 0), (5, 0), (5, 3)]);
+        assert_eq!(points(&s, 1), vec![(0, 0), (10, 0), (10, 6)]);
     }
 
     #[test]
     fn removes_backtracking_spikes() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(0, 0), (6, 0), (4, 0)])],
+            wires: vec![wire(1, &[(0, 0), (12, 0), (8, 0)])],
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(0, 0), (4, 0)]);
+        assert_eq!(points(&s, 1), vec![(0, 0), (8, 0)]);
     }
 
     #[test]
     fn keeps_vertices_that_other_objects_touch() {
         let mut s = Schematic {
             wires: vec![
-                wire(1, &[(0, 0), (2, 0), (5, 0)]),
-                wire(2, &[(2, 0), (2, 4)]),
+                wire(1, &[(0, 0), (4, 0), (10, 0)]),
+                wire(2, &[(4, 0), (4, 8)]),
             ],
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(0, 0), (2, 0), (5, 0)]);
+        assert_eq!(points(&s, 1), vec![(0, 0), (4, 0), (10, 0)]);
     }
 
     #[test]
     fn a_label_on_a_segment_interior_gets_a_vertex() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(0, 0), (6, 0)])],
+            wires: vec![wire(1, &[(0, 0), (12, 0)])],
             labels: vec![NetLabel {
                 id: 2,
                 name: "out".into(),
-                position: Point::new(3, 0),
+                position: Point::new(6, 0),
             }],
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(0, 0), (3, 0), (6, 0)]);
+        assert_eq!(points(&s, 1), vec![(0, 0), (6, 0), (12, 0)]);
     }
 
     #[test]
     fn straight_wires_meeting_end_to_end_become_one() {
         let mut s = Schematic {
-            wires: vec![wire(4, &[(0, 0), (3, 0)]), wire(2, &[(6, 0), (3, 0)])],
+            wires: vec![wire(4, &[(0, 0), (6, 0)]), wire(2, &[(12, 0), (6, 0)])],
             ..Schematic::default()
         };
         normalize(&mut s);
         assert_eq!(s.wires.len(), 1);
         let mut joined = points(&s, 2);
         joined.sort_unstable();
-        assert_eq!(joined, vec![(0, 0), (6, 0)]);
+        assert_eq!(joined, vec![(0, 0), (12, 0)]);
     }
 
     #[test]
     fn wires_meeting_at_an_angle_stay_separate() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(0, 0), (3, 0)]), wire(2, &[(3, 0), (3, 4)])],
+            wires: vec![wire(1, &[(0, 0), (6, 0)]), wire(2, &[(6, 0), (6, 8)])],
             ..Schematic::default()
         };
         normalize(&mut s);
@@ -341,12 +341,12 @@ mod tests {
 
     #[test]
     fn a_folded_back_spike_leaves_a_stub_to_a_t_junction_on_it() {
-        // Wire 1 doubles back from (8,4) to (8,0); wire 2 tees onto the
-        // doubled part at (8,2).
+        // Wire 1 doubles back from (16,8) to (16,0); wire 2 tees onto the
+        // doubled part at (16,4).
         let mut s = Schematic {
             wires: vec![
-                wire(1, &[(2, 0), (8, 0), (8, 4), (8, 0), (10, 0)]),
-                wire(2, &[(8, 2), (12, 2)]),
+                wire(1, &[(4, 0), (16, 0), (16, 8), (16, 0), (20, 0)]),
+                wire(2, &[(16, 4), (24, 4)]),
             ],
             next_id: 3,
             ..Schematic::default()
@@ -354,47 +354,47 @@ mod tests {
         normalize(&mut s);
         assert_eq!(
             points(&s, 1),
-            vec![(2, 0), (8, 0), (10, 0)],
+            vec![(4, 0), (16, 0), (20, 0)],
             "the spike goes; the stub's end keeps a vertex"
         );
         assert_eq!(
             others(&s, 1),
-            vec![vec![(8, 2), (12, 2)], vec![(8, 0), (8, 2)]],
+            vec![vec![(16, 4), (24, 4)], vec![(16, 0), (16, 4)]],
             "a stub keeps reaching the T-junction"
         );
         let c = xsim_project::connectivity(&s);
-        assert_eq!(c.junctions, vec![Point::new(8, 0)], "one T, no corner dot");
+        assert_eq!(c.junctions, vec![Point::new(16, 0)], "one T, no corner dot");
     }
 
     #[test]
     fn a_pin_on_a_folded_back_spike_keeps_a_stub() {
-        // R3's left pin (8,1) lies on the doubled part.
+        // R3's left pin (16,2) lies on the doubled part.
         let mut s = Schematic {
             components: vec![xsim_project::Component {
                 id: 3,
                 name: "R3".into(),
-                position: Point::new(10, 1),
+                position: Point::new(20, 2),
                 orientation: xsim_project::Orientation::default(),
                 part: xsim_project::Part::Resistor { resistance: 1e3 },
             }],
-            wires: vec![wire(1, &[(2, 0), (8, 0), (8, 4), (8, 0), (10, 0)])],
+            wires: vec![wire(1, &[(4, 0), (16, 0), (16, 8), (16, 0), (20, 0)])],
             next_id: 4,
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(2, 0), (8, 0), (10, 0)]);
-        assert_eq!(others(&s, 1), vec![vec![(8, 0), (8, 1)]]);
+        assert_eq!(points(&s, 1), vec![(4, 0), (16, 0), (20, 0)]);
+        assert_eq!(others(&s, 1), vec![vec![(16, 0), (16, 2)]]);
     }
 
     #[test]
     fn nested_folds_keep_the_stub_on_the_wire() {
-        // (0,0) → (15,0) → (5,0) → (2,0): two folds; wire 2 tees on at
-        // (12,0), which the first fold cuts off, and the second fold removes
+        // (0,0) → (30,0) → (10,0) → (4,0): two folds; wire 2 tees on at
+        // (24,0), which the first fold cuts off, and the second fold removes
         // where the first fold's stub starts.
         let mut s = Schematic {
             wires: vec![
-                wire(1, &[(0, 0), (10, 0), (15, 0), (5, 0), (2, 0)]),
-                wire(2, &[(12, 0), (12, 4)]),
+                wire(1, &[(0, 0), (20, 0), (30, 0), (10, 0), (4, 0)]),
+                wire(2, &[(24, 0), (24, 8)]),
             ],
             next_id: 3,
             ..Schematic::default()
@@ -402,39 +402,39 @@ mod tests {
         normalize(&mut s);
         assert_eq!(
             points(&s, 1),
-            vec![(0, 0), (12, 0)],
+            vec![(0, 0), (24, 0)],
             "the stubs joined back into the wire"
         );
-        assert_eq!(points(&s, 2), vec![(12, 0), (12, 4)]);
+        assert_eq!(points(&s, 2), vec![(24, 0), (24, 8)]);
         assert_eq!(s.wires.len(), 2, "no stub is left over");
     }
 
     #[test]
     fn a_fold_with_nothing_on_it_simply_goes() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(2, 0), (8, 0), (8, 4), (8, 0), (10, 0)])],
+            wires: vec![wire(1, &[(4, 0), (16, 0), (16, 8), (16, 0), (20, 0)])],
             ..Schematic::default()
         };
         normalize(&mut s);
-        assert_eq!(points(&s, 1), vec![(2, 0), (10, 0)]);
+        assert_eq!(points(&s, 1), vec![(4, 0), (20, 0)]);
         assert_eq!(s.wires.len(), 1);
     }
 
     #[test]
     fn normalizing_twice_changes_nothing() {
-        // Wire 2 collapses to a point; its vertex anchored (2,14) of wire 1,
+        // Wire 2 collapses to a point; its vertex anchored (4,28) of wire 1,
         // and a label sat on it.
         let mut s = Schematic {
             wires: vec![
-                wire(1, &[(12, 14), (2, 14), (1, 14)]),
-                wire(2, &[(2, 14), (2, 14)]),
-                wire(3, &[(3, 13), (9, 13), (3, 13)]),
-                wire(4, &[(3, 7), (3, 20)]),
+                wire(1, &[(24, 28), (4, 28), (2, 28)]),
+                wire(2, &[(4, 28), (4, 28)]),
+                wire(3, &[(6, 26), (18, 26), (6, 26)]),
+                wire(4, &[(6, 14), (6, 40)]),
             ],
             labels: vec![NetLabel {
                 id: 5,
                 name: "out".into(),
-                position: Point::new(3, 13),
+                position: Point::new(6, 26),
             }],
             ..Schematic::default()
         };
@@ -442,14 +442,14 @@ mod tests {
         let once = s.clone();
         normalize(&mut s);
         assert_eq!(s, once);
-        assert_eq!(points(&s, 1), vec![(12, 14), (1, 14)]);
-        assert_eq!(points(&s, 4), vec![(3, 7), (3, 13), (3, 20)]);
+        assert_eq!(points(&s, 1), vec![(24, 28), (2, 28)]);
+        assert_eq!(points(&s, 4), vec![(6, 14), (6, 26), (6, 40)]);
     }
 
     #[test]
     fn degenerate_wires_are_removed() {
         let mut s = Schematic {
-            wires: vec![wire(1, &[(1, 1), (1, 1)])],
+            wires: vec![wire(1, &[(2, 2), (2, 2)])],
             ..Schematic::default()
         };
         normalize(&mut s);

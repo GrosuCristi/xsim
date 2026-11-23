@@ -9,12 +9,12 @@ use xsim_project::{Schematic, SchematicView};
 #[gpui_kit::test]
 fn the_wheel_zooms_about_the_cursor(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    let anchor = h.at(8, 0);
+    let anchor = h.at(16, 0);
     h.wheel(anchor, 2.0, Modifiers::default());
     let view = h.read(|e| e.view());
     assert!(view.zoom > fixed_view().zoom, "{view:?}");
     assert!(view.user_set);
-    let after = h.at(8, 0);
+    let after = h.at(16, 0);
     assert!((after.x - anchor.x).abs() < px(1.0) && (after.y - anchor.y).abs() < px(1.0));
     assert!(h.events().contains(&EditorEvent::ViewChanged));
     h.wheel_notches(anchor, -20);
@@ -29,11 +29,11 @@ fn the_wheel_zooms_about_the_cursor(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn odd_wheel_events_zoom_by_at_most_a_capped_step(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    let at = h.at(8, 0);
+    let at = h.at(16, 0);
     // Windows' "one screen at a time" setting: u32::MAX lines per notch.
     h.wheel(at, 4_294_967_295.0, Modifiers::default());
     let zoom = h.read(|e| e.view().zoom);
-    assert!((zoom - 20.0 * 1.18).abs() < 0.01, "one notch: {zoom}");
+    assert!((zoom - 10.0 * 1.18).abs() < 0.01, "one notch: {zoom}");
     h.wheel(at, f32::NAN, Modifiers::default());
     assert_eq!(h.read(|e| e.view().zoom), zoom, "a broken event is ignored");
     h.close();
@@ -42,7 +42,7 @@ fn odd_wheel_events_zoom_by_at_most_a_capped_step(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn trackpad_deltas_pan_or_zoom_smoothly(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    let at = h.at(8, 0);
+    let at = h.at(16, 0);
     h.scroll(
         at,
         ScrollDelta::Pixels(point(px(20.0), px(-10.0))),
@@ -50,7 +50,7 @@ fn trackpad_deltas_pan_or_zoom_smoothly(cx: &mut TestAppContext) {
     );
     let view = h.read(|e| e.view());
     assert_eq!(view.zoom, fixed_view().zoom, "pixel deltas pan");
-    assert_eq!(view.center, [-1.0, 0.5], "content follows the fingers");
+    assert_eq!(view.center, [-2.0, 1.0], "content follows the fingers");
     let ctrl = Modifiers {
         control: true,
         ..Modifiers::default()
@@ -58,7 +58,7 @@ fn trackpad_deltas_pan_or_zoom_smoothly(cx: &mut TestAppContext) {
     h.scroll(at, ScrollDelta::Pixels(point(px(0.0), px(5.0))), ctrl);
     let zoom = h.read(|e| e.view().zoom);
     assert!(
-        (zoom - 20.0 * 0.05f32.exp()).abs() < 1e-3,
+        (zoom - 10.0 * 0.05f32.exp()).abs() < 1e-3,
         "with Ctrl a small delta zooms a little: {zoom}"
     );
     h.close();
@@ -67,7 +67,7 @@ fn trackpad_deltas_pan_or_zoom_smoothly(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn shift_and_the_wheel_scroll_sideways_as_windows_reports_it(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    let at = h.at(8, 0);
+    let at = h.at(16, 0);
     let notch = crate::ui::navigation::LINES_PER_NOTCH;
     // Windows and X11 turn Shift+wheel into a horizontal delta.
     h.scroll(at, ScrollDelta::Lines(point(-notch, 0.0)), shift());
@@ -91,7 +91,7 @@ fn middle_drag_and_space_drag_pan(cx: &mut TestAppContext) {
     let end = start + point(px(40.0), px(-20.0));
     h.drag_px(start, end, MouseButton::Middle, Modifiers::default());
     let view = h.read(|e| e.view());
-    assert_eq!(view.center, [-2.0, 1.0], "content follows the mouse");
+    assert_eq!(view.center, [-4.0, 2.0], "content follows the mouse");
     h.space(true);
     h.drag_px(end, start, MouseButton::Left, Modifiers::default());
     h.space(false);
@@ -112,7 +112,7 @@ fn an_unset_view_fits_the_drawing_on_first_show(cx: &mut TestAppContext) {
     assert!(!view.user_set, "fitting automatically is not a user change");
     assert_ne!(view.zoom, SchematicView::default().zoom);
     assert!(
-        view.center[0].abs() < 1.0 && view.center[1].abs() < 1.0,
+        view.center[0].abs() < 2.0 && view.center[1].abs() < 2.0,
         "{view:?}"
     );
     assert!(!h.events().contains(&EditorEvent::ViewChanged));
@@ -131,7 +131,7 @@ fn zoom_to_fit_recentres_the_drawing(cx: &mut TestAppContext) {
     );
     h.click_control("toolbar-fit");
     let view = h.read(|e| e.view());
-    assert_eq!(view.center, [4.0, 0.0]);
+    assert_eq!(view.center, [8.0, 0.0]);
     h.keys("=");
     assert!(h.read(|e| e.view().zoom) > view.zoom);
     h.keys("f");
@@ -176,5 +176,57 @@ fn a_narrow_editor_wraps_the_toolbar_instead_of_clipping_it(cx: &mut TestAppCont
         canvas.size.height > px(300.0),
         "the canvas keeps most of the height"
     );
+    h.close();
+}
+
+/// D22: a schema-2 project opens migrated, every coordinate doubled and the
+/// zoom halved: every pin is drawn at the very pixel where the schema-2 view
+/// drew it, and the symbols keep their size on screen.
+#[gpui_kit::test]
+fn a_migrated_schema2_view_draws_every_pin_where_it_was(cx: &mut TestAppContext) {
+    const FIXTURE: &str = include_str!("../../../project/tests/fixtures/schema2_mixed.xsim_proj");
+    // The file as schema 2 wrote it, and as this version opens it.
+    let old: xsim_project::Project = serde_json::from_str(FIXTURE).expect("the fixture parses");
+    let new = xsim_project::Project::from_json(FIXTURE)
+        .expect("the fixture opens")
+        .project;
+    let (old, new) = (&old.circuits[0], &new.circuits[0]);
+    assert!(new.view.user_set, "the saved view is used, not a fit");
+    let mut h = open_with_view(cx, new.schematic.clone(), new.view);
+    assert_eq!(h.read(|e| e.view()), new.view, "the view is kept as saved");
+    let viewport = h
+        .read(|e| e.viewport.get())
+        .expect("the canvas has been laid out");
+    let centre = viewport.center();
+    let scale = old.view.zoom * viewport.ui_scale;
+    let mut pins = 0;
+    for c in &new.schematic.components {
+        for pin in c.pins() {
+            // Symbols are twice as large in grid units, so the schema-2 pin
+            // sat at half the coordinates.
+            let (x, y) = (pin.x as f32 / 2.0, pin.y as f32 / 2.0);
+            let expected = (
+                centre.x + (x - old.view.center[0]) * scale,
+                centre.y + (y - old.view.center[1]) * scale,
+            );
+            let drawn = h
+                .read(|e| e.grid_to_window(pin))
+                .expect("the canvas has been laid out");
+            let (dx, dy) = (
+                f32::from(drawn.x) - expected.0,
+                f32::from(drawn.y) - expected.1,
+            );
+            assert!(
+                dx.abs() < 1e-3 && dy.abs() < 1e-3,
+                "{} pin {pin:?} moved by ({dx}, {dy}) px",
+                c.name
+            );
+            pins += 1;
+        }
+    }
+    assert!(pins > 20, "{pins} pins checked");
+    // A resistor is as long on screen as before: 8 units at the new zoom,
+    // 4 at the old one.
+    assert_eq!(8.0 * new.view.zoom, 4.0 * old.view.zoom);
     h.close();
 }

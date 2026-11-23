@@ -33,15 +33,15 @@ fn draft(h: &mut Harness) -> Vec<Point> {
 fn clicking_a_pin_starts_a_wire_that_finishes_on_another_pin(cx: &mut TestAppContext) {
     let mut s = two_resistors();
     s.wires.clear();
-    s.components[1].position = p(8, 4);
+    s.components[1].position = p(16, 8);
     let mut h = open(cx, s.clone());
     h.click(0, 0);
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(1)]);
-    h.click(2, 0);
+    h.click(4, 0);
     assert_eq!(h.read(|e| e.tool()), Tool::Select, "the select tool stays");
     assert_eq!(
         draft(&mut h),
-        vec![p(2, 0)],
+        vec![p(4, 0)],
         "a click on a pin starts a wire"
     );
     assert!(
@@ -49,11 +49,11 @@ fn clicking_a_pin_starts_a_wire_that_finishes_on_another_pin(cx: &mut TestAppCon
         "the press neither selects nor keeps the part selected"
     );
     assert_eq!(h.schematic(), s, "nothing is committed or moved yet");
-    let at = h.at(6, 4);
+    let at = h.at(12, 8);
     h.hover(at);
     assert_eq!(
         h.read(|e| e.wire_preview()),
-        vec![p(2, 0), p(6, 0), p(6, 4)],
+        vec![p(4, 0), p(12, 0), p(12, 8)],
         "the rubber band leaves the pin along its axis, as with the wire tool"
     );
     assert_eq!(h.read(|e| e.cursor_style()), CursorStyle::Crosshair);
@@ -63,10 +63,10 @@ fn clicking_a_pin_starts_a_wire_that_finishes_on_another_pin(cx: &mut TestAppCon
         "no hover highlight while drawing"
     );
     assert!(h.read(|e| e.hint()).contains("Click to add a corner"));
-    h.click(6, 4);
+    h.click(12, 8);
     let after = h.schematic();
     assert_eq!(after.wires.len(), 1, "clicking the second pin finishes");
-    assert_eq!(after.wires[0].points, vec![p(2, 0), p(6, 0), p(6, 4)]);
+    assert_eq!(after.wires[0].points, vec![p(4, 0), p(12, 0), p(12, 8)]);
     let c = connectivity(&after);
     assert_eq!(c.net_of_pin(1, 1), c.net_of_pin(2, 0));
     assert!(draft(&mut h).is_empty());
@@ -80,21 +80,21 @@ fn clicking_a_pin_starts_a_wire_that_finishes_on_another_pin(cx: &mut TestAppCon
 fn dragging_from_a_pin_starts_a_wire_that_keeps_drawing_after_the_release(cx: &mut TestAppContext) {
     let s = two_resistors();
     let mut h = open(cx, s.clone());
-    h.drag((-2, 0), (-2, 4));
+    h.drag((-4, 0), (-4, 8));
     assert_eq!(h.schematic(), s, "the part did not move");
-    assert_eq!(draft(&mut h), vec![p(-2, 0)]);
+    assert_eq!(draft(&mut h), vec![p(-4, 0)]);
     assert_eq!(
         h.read(|e| e.wire_preview()),
-        vec![p(-2, 0), p(-2, 4)],
+        vec![p(-4, 0), p(-4, 8)],
         "the wire follows the mouse"
     );
-    h.click(-2, 4);
+    h.click(-4, 8);
     assert_eq!(
         draft(&mut h),
-        vec![p(-2, 0), p(-2, 4)],
+        vec![p(-4, 0), p(-4, 8)],
         "a click adds a corner"
     );
-    h.click(-5, 4);
+    h.click(-10, 8);
     h.keys("enter");
     let after = h.schematic();
     assert_eq!(after.wires.len(), 2);
@@ -102,7 +102,7 @@ fn dragging_from_a_pin_starts_a_wire_that_keeps_drawing_after_the_release(cx: &m
         after
             .wires
             .iter()
-            .any(|w| w.points == vec![p(-2, 0), p(-2, 4), p(-5, 4)]),
+            .any(|w| w.points == vec![p(-4, 0), p(-4, 8), p(-10, 8)]),
         "{:?}",
         after.wires
     );
@@ -116,22 +116,22 @@ fn dragging_from_a_pin_starts_a_wire_that_keeps_drawing_after_the_release(cx: &m
 fn escape_cancels_the_wire_and_part_bodies_still_move(cx: &mut TestAppContext) {
     let s = two_resistors();
     let mut h = open(cx, s.clone());
-    h.click(2, 0);
+    h.click(4, 0);
     assert_eq!(
         draft(&mut h),
-        vec![p(2, 0)],
+        vec![p(4, 0)],
         "a pin that already has a wire starts a branch"
     );
-    h.click(2, 3);
+    h.click(4, 6);
     h.keys("escape");
     assert!(draft(&mut h).is_empty(), "Esc drops the unfinished wire");
     assert_eq!(h.schematic(), s);
     assert_eq!(h.read(|e| e.tool()), Tool::Select);
-    h.drag((0, 0), (0, -2));
+    h.drag((0, 0), (0, -4));
     let moved = h.schematic();
     assert_eq!(
         moved.components[0].position,
-        p(0, -2),
+        p(0, -4),
         "the body drags the part"
     );
     assert!(draft(&mut h).is_empty());
@@ -145,7 +145,7 @@ fn double_clicking_a_pin_opens_the_part_instead_of_wiring(cx: &mut TestAppContex
     let opened = Rc::new(RefCell::new(Vec::new()));
     let log = opened.clone();
     h.update(|e, _| e.set_properties_opener(move |_, id, _, _| log.borrow_mut().push(id)));
-    let pin = h.at(10, 0);
+    let pin = h.at(20, 0);
     h.double_click_px(pin);
     assert_eq!(*opened.borrow(), vec![2]);
     assert!(draft(&mut h).is_empty(), "no wire is left drawing");
@@ -157,10 +157,10 @@ fn double_clicking_a_pin_opens_the_part_instead_of_wiring(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn shift_on_a_pin_toggles_the_part(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
-    h.click_with(-2, 0, shift());
+    h.click_with(-4, 0, shift());
     assert!(draft(&mut h).is_empty());
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(1)]);
-    h.click_with(10, 0, shift());
+    h.click_with(20, 0, shift());
     assert_eq!(
         h.read(|e| e.selection()),
         vec![ObjectRef::Component(1), ObjectRef::Component(2)]
@@ -171,11 +171,11 @@ fn shift_on_a_pin_toggles_the_part(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_cursor_shows_wiring_over_a_pin_only_without_results(cx: &mut TestAppContext) {
     let mut h = open(cx, rc_low_pass());
-    let pin = h.at(2, -4);
+    let pin = h.at(4, -8);
     h.hover(pin);
-    assert_eq!(h.read(|e| e.hover.wire_start), Some(p(2, -4)));
+    assert_eq!(h.read(|e| e.hover.wire_start), Some(p(4, -8)));
     assert_eq!(h.read(|e| e.cursor_style()), CursorStyle::Crosshair);
-    let body = h.at(0, -4);
+    let body = h.at(0, -8);
     h.hover(body);
     assert_eq!(h.read(|e| e.hover.wire_start), None);
     assert_eq!(h.read(|e| e.cursor_style()), CursorStyle::Arrow);
@@ -203,14 +203,14 @@ fn with_results_shown_a_pin_probes_and_wires_again_without_them(cx: &mut TestApp
     let context = probe_context(&rc_low_pass(), AnalysisKind::Transient);
     h.update(|e, cx| e.set_probe_context(Some(context), cx));
     h.events();
-    h.click(2, -4);
+    h.click(4, -8);
     assert_eq!(
         probes(&mut h),
         vec![ProbeRequest::Voltage { node: "out".into() }]
     );
     assert!(draft(&mut h).is_empty(), "the probe does not start a wire");
     assert_eq!(h.read(|e| e.selection()), vec![ObjectRef::Component(2)]);
-    h.drag((2, -4), (-4, -4));
+    h.drag((4, -8), (-8, -8));
     assert_eq!(
         probes(&mut h),
         vec![ProbeRequest::Differential {
@@ -221,8 +221,8 @@ fn with_results_shown_a_pin_probes_and_wires_again_without_them(cx: &mut TestApp
     );
     assert_eq!(h.schematic(), rc_low_pass());
     h.update(|e, cx| e.set_probe_context(None, cx));
-    h.click(2, -4);
-    assert_eq!(draft(&mut h), vec![p(2, -4)]);
+    h.click(4, -8);
+    assert_eq!(draft(&mut h), vec![p(4, -8)]);
     assert!(probes(&mut h).is_empty());
     h.close();
 }
@@ -231,7 +231,7 @@ fn with_results_shown_a_pin_probes_and_wires_again_without_them(cx: &mut TestApp
 fn read_only_pins_never_start_wires(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
     h.update(|e, cx| e.set_read_only(true, cx));
-    h.click(-2, 0);
+    h.click(-4, 0);
     assert!(draft(&mut h).is_empty());
     h.keys("enter");
     assert_eq!(h.schematic(), two_resistors());
@@ -252,11 +252,11 @@ fn record_opened(h: &mut Harness) -> Rc<RefCell<Vec<Id>>> {
 fn double_clicking_to_finish_on_a_pin_or_label_opens_nothing(cx: &mut TestAppContext) {
     let mut s = two_resistors();
     s.wires.clear();
-    s.components[1].position = p(8, 4);
+    s.components[1].position = p(16, 8);
     let mut h = open(cx, s.clone());
     let opened = record_opened(&mut h);
-    h.click(2, 0);
-    let pin = h.at(6, 4);
+    h.click(4, 0);
+    let pin = h.at(12, 8);
     h.double_click_px(pin);
     let after = h.schematic();
     assert_eq!(after.wires.len(), 1, "the first click finished the wire");
@@ -278,15 +278,19 @@ fn double_clicking_to_finish_on_a_pin_or_label_opens_nothing(cx: &mut TestAppCon
     s.labels.push(NetLabel {
         id,
         name: "out".into(),
-        position: p(2, 6),
+        position: p(4, 12),
     });
     let mut h = open(cx, s);
-    h.click(2, 0);
-    let label = h.at(2, 6);
+    h.click(4, 0);
+    let label = h.at(4, 12);
     h.double_click_px(label);
     assert!(draft(&mut h).is_empty());
     let wires: Vec<Vec<Point>> = h.schematic().wires.into_iter().map(|w| w.points).collect();
-    assert_eq!(wires, vec![vec![p(2, 0), p(2, 6)]], "finished on the label");
+    assert_eq!(
+        wires,
+        vec![vec![p(4, 0), p(4, 12)]],
+        "finished on the label"
+    );
     assert!(
         h.read(|e| e.label_editor.is_none()),
         "the label is not renamed"
@@ -298,7 +302,7 @@ fn double_clicking_to_finish_on_a_pin_or_label_opens_nothing(cx: &mut TestAppCon
 fn a_pin_click_then_enter_commits_nothing(cx: &mut TestAppContext) {
     let mut h = open(cx, two_resistors());
     h.events();
-    h.click(-2, 0);
+    h.click(-4, 0);
     h.keys("enter");
     assert!(draft(&mut h).is_empty(), "Enter ends the draft");
     assert_eq!(h.schematic(), two_resistors());
@@ -314,17 +318,17 @@ fn a_pin_click_then_enter_commits_nothing(cx: &mut TestAppContext) {
 fn the_cursor_is_right_without_a_mouse_move(cx: &mut TestAppContext) {
     let mut s = two_resistors();
     s.wires.clear();
-    s.components[1].position = p(8, 4);
+    s.components[1].position = p(16, 8);
     let mut h = open(cx, s);
-    h.click(2, 0);
-    h.click(6, 4);
+    h.click(4, 0);
+    h.click(12, 8);
     assert_eq!(h.schematic().wires.len(), 1);
     assert_eq!(
         h.read(|e| e.cursor_style()),
         CursorStyle::Crosshair,
         "after finishing on a pin"
     );
-    h.click(-2, 0);
+    h.click(-4, 0);
     h.keys("escape");
     assert!(draft(&mut h).is_empty());
     assert_eq!(
@@ -337,7 +341,7 @@ fn the_cursor_is_right_without_a_mouse_move(cx: &mut TestAppContext) {
     let mut h = open(cx, rc_low_pass());
     let context = probe_context(&rc_low_pass(), AnalysisKind::Transient);
     h.update(|e, cx| e.set_probe_context(Some(context), cx));
-    let pin = h.at(2, -4);
+    let pin = h.at(4, -8);
     h.hover(pin);
     h.update(|e, cx| e.set_probe_context(None, cx));
     assert_eq!(
@@ -387,7 +391,7 @@ fn every_part_moves_by_its_body_and_wires_from_its_pins_at_every_zoom(cx: &mut T
     }
     assert!(kinds.contains(&PartKind::Ground), "{kinds:?}");
     let mut failures = Vec::new();
-    for zoom in [3.0, 10.0, 20.0, 120.0] {
+    for zoom in [1.5, 5.0, 10.0, 60.0] {
         let view = SchematicView {
             center: [0.0, 0.0],
             zoom,
@@ -397,9 +401,9 @@ fn every_part_moves_by_its_body_and_wires_from_its_pins_at_every_zoom(cx: &mut T
             let s = single(kind);
             let mut h = open_with_view(cx, s.clone(), view);
             let c = body_rect(&s.components[0]).center();
-            let (a, b) = (h.at_f(c.x, c.y), h.at_f(c.x, c.y + 3.0));
+            let (a, b) = (h.at_f(c.x, c.y), h.at_f(c.x, c.y + 6.0));
             h.drag_px(a, b, MouseButton::Left, Modifiers::default());
-            if h.schematic().components[0].position != p(0, 3) || !draft(&mut h).is_empty() {
+            if h.schematic().components[0].position != p(0, 6) || !draft(&mut h).is_empty() {
                 failures.push(format!("{kind:?} at zoom {zoom}: the body did not move"));
             }
             h.keys("escape");
@@ -427,40 +431,40 @@ fn every_part_moves_by_its_body_and_wires_from_its_pins_at_every_zoom(cx: &mut T
 fn panning_tools_undo_and_read_only_leave_no_stuck_draft(cx: &mut TestAppContext) {
     let s = two_resistors();
     let mut h = open(cx, s.clone());
-    h.click(-2, 0);
+    h.click(-4, 0);
     h.space(true);
-    h.drag((5, 5), (6, 6));
+    h.drag((10, 10), (12, 12));
     h.space(false);
     assert_eq!(
         draft(&mut h),
-        vec![p(-2, 0)],
+        vec![p(-4, 0)],
         "Space-drag pans and keeps drawing"
     );
-    let (a, b) = (h.at(5, 5), h.at(4, 4));
+    let (a, b) = (h.at(10, 10), h.at(8, 8));
     h.drag_px(a, b, MouseButton::Middle, Modifiers::default());
     assert_eq!(
         draft(&mut h),
-        vec![p(-2, 0)],
+        vec![p(-4, 0)],
         "middle-drag pans and keeps drawing"
     );
     h.keys(&primary("a"));
     assert!(draft(&mut h).is_empty(), "select all drops the draft");
     for key in ["w", "s", "n"] {
         h.keys("escape escape");
-        h.click(-2, 0);
-        assert_eq!(draft(&mut h), vec![p(-2, 0)]);
+        h.click(-4, 0);
+        assert_eq!(draft(&mut h), vec![p(-4, 0)]);
         h.keys(key);
         assert!(draft(&mut h).is_empty(), "{key} drops the draft");
     }
     h.keys("escape escape");
     assert_eq!(h.schematic(), s, "nothing was committed");
     // Undo drops a draft once there is something to undo.
-    h.drag((0, 0), (0, 2));
-    h.click(-2, 2);
+    h.drag((0, 0), (0, 4));
+    h.click(-4, 4);
     h.keys(&primary("z"));
     assert!(draft(&mut h).is_empty(), "undo");
     assert_eq!(h.schematic(), s);
-    h.click(-2, 0);
+    h.click(-4, 0);
     h.update(|e, cx| e.set_read_only(true, cx));
     assert!(draft(&mut h).is_empty(), "read-only drops the draft");
     h.keys("enter");
@@ -471,12 +475,12 @@ fn panning_tools_undo_and_read_only_leave_no_stuck_draft(cx: &mut TestAppContext
 #[gpui_kit::test]
 fn a_wire_being_drawn_when_results_arrive_is_finished_as_usual(cx: &mut TestAppContext) {
     let mut h = open(cx, rc_low_pass());
-    h.click(-2, -4);
-    h.click(-2, -8);
+    h.click(-4, -8);
+    h.click(-4, -16);
     let context = probe_context(&rc_low_pass(), AnalysisKind::Transient);
     h.update(|e, cx| e.set_probe_context(Some(context), cx));
     h.events();
-    h.click(2, -4);
+    h.click(4, -8);
     assert!(draft(&mut h).is_empty());
     assert!(
         probes(&mut h).is_empty(),
@@ -486,7 +490,7 @@ fn a_wire_being_drawn_when_results_arrive_is_finished_as_usual(cx: &mut TestAppC
     assert!(
         s.wires
             .iter()
-            .any(|w| w.points.first() == Some(&p(-2, -4)) && w.points.last() == Some(&p(2, -4))),
+            .any(|w| w.points.first() == Some(&p(-4, -8)) && w.points.last() == Some(&p(4, -8))),
         "{:?}",
         s.wires
     );
@@ -497,24 +501,24 @@ fn a_wire_being_drawn_when_results_arrive_is_finished_as_usual(cx: &mut TestAppC
 fn zoomed_far_out_only_a_press_right_on_the_pin_wires(cx: &mut TestAppContext) {
     let view = SchematicView {
         center: [0.0, 0.0],
-        zoom: 5.0,
+        zoom: 2.5,
         user_set: true,
     };
     let mut h = open_with_view(cx, two_resistors(), view);
     assert!(
-        h.read(|e| e.hit_tolerance()) > 1.0,
+        h.read(|e| e.hit_tolerance()) > 2.0,
         "the pin hit area covers most of the part"
     );
-    let (near, up) = (h.at_f(1.0, 0.0), h.at_f(1.0, -3.0));
+    let (near, up) = (h.at_f(2.0, 0.0), h.at_f(2.0, -6.0));
     h.drag_px(near, up, gpui_kit::MouseButton::Left, Modifiers::default());
     assert!(draft(&mut h).is_empty());
     assert_eq!(
         h.schematic().components[0].position,
-        p(0, -3),
+        p(0, -6),
         "a press a unit from the pin moves the part"
     );
-    let on_pin = h.at_f(2.3, -3.1);
+    let on_pin = h.at_f(4.6, -6.2);
     h.click_px(on_pin, Modifiers::default());
-    assert_eq!(draft(&mut h), vec![p(2, -3)]);
+    assert_eq!(draft(&mut h), vec![p(4, -6)]);
     h.close();
 }
