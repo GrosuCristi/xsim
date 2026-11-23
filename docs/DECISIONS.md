@@ -109,7 +109,7 @@ A transient result keeps the output-grid points, the breakpoints, and every acce
 
 ## D19 — Owner UI feedback, round 2 (2026-11-22, amends D14)
 
-- Panels open and close without animation. This covers dialogs (properties, analysis settings, component library, settings, recovery), the diagnostics dock, the plot's side panels, and menus and popovers. Implementation note: this uses the kit's global reduce-motion switch, which also makes toasts, tooltips and tab highlights instant. The run spinner is drawn by xsim and still turns.
+- Panels open and close without animation. This covers dialogs (properties, analysis settings, component library, settings, recovery), the diagnostics dock, the plot's side panels, and menus and popovers. Implementation note: this uses the kit's global reduce-motion switch, which also makes tooltips and tab highlights instant. The run spinner is drawn by xsim and still turns.
 - Plot cursors move on the x axis only. Each cursor is a vertical line dragged along x, with no horizontal cursor lines. The readout still shows each cursor's value of its trace at x (y1, y2), Δx and Δy. This replaces D14's crosshair cursors.
 
 ## D20 — Owner UI feedback, round 3 (2026-11-23)
@@ -194,3 +194,20 @@ xsim is dual-licensed under MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`; 
   - Double-clicking a pane divider makes the two panes equal.
   - The minimum pane height is 7.5 rem.
   - Pane heights are stored as relative weights.
+
+## D24 — Dialog windows open at their full height (bug fix, 2026-11-23)
+
+The owner reported that most dialog windows were too short and needed scrolling to reach OK/Cancel. Cause: a dialog window opened centred at an estimated height, then resized to its measured content. GPUI cannot move an open window, so it could only grow downward until the screen bottom, which is reached quickly at 200% display scaling (about 1030 logical px of height). Fix: a dialog window must open with its real content height, fully on screen and centred over the main window. It scrolls only when the content is taller than the screen's work area.
+
+## D25 — Native prompts must not block inside UI callbacks (crash fix, 2026-11-23)
+
+The owner reported a crash (exit 0xc0000409) when closing a second circuit tab. Likely cause: the native confirmation box (`rfd`) was opened synchronously inside GPUI's click handler. Its nested Windows message loop re-entered GPUI while state was borrowed, so the app panicked, and a panic in a window callback aborts the process. The same pattern was used for unsaved-changes, open, save-as and export prompts. Fix: every native prompt runs asynchronously, and its answer is applied after it returns. Panics are also logged to a crash file in the app-data folder so future crashes can be diagnosed.
+- **D24 and D25 implementation (for confirmation):**
+  - A dialog is measured in a hidden probe window, then opens at its real height.
+  - It reserves room for the taller states it can switch to (other waveform or analysis types, a few more PWL rows, a larger UI scale). It therefore opens slightly above centre when needed.
+  - The OK/Cancel footer is pinned; only content taller than the screen scrolls above it. This replaces D22's "footer included".
+  - The Windows frame size is compensated for Dialog-kind windows.
+  - Native questions are GPUI task dialogs with Save / Don't save / Cancel and Delete / Cancel buttons; their title bar shows "Warning".
+  - While a question is open, other prompting commands are ignored.
+  - Panics are written to `crash.log` in the app-data folder; it rotates past 1 MiB.
+  - Settings and copy-plot failures are reported in the diagnostics dock instead of toasts.

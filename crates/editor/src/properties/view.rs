@@ -234,7 +234,8 @@ impl PropertiesView {
         );
     }
 
-    fn set_model(&mut self, item: &LibraryItem, cx: &mut Context<Self>) {
+    /// Sets the model picked from the library.
+    pub(super) fn set_model(&mut self, item: &LibraryItem, cx: &mut Context<Self>) {
         if let LibraryItem::Diode { model }
         | LibraryItem::Bjt { model, .. }
         | LibraryItem::Jfet { model, .. } = item

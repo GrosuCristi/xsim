@@ -7,6 +7,7 @@ use super::{DocumentState, Workspace};
 use crate::diagnostics::{Diagnostic, Severity, Source};
 use crate::dialogs::recovery::open_recovery_dialog;
 use gpui_kit::{prelude::*, *};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use xsim_project::appdata::{AppData, Orphan, RecoverySession, RecoverySnapshot};
@@ -147,17 +148,34 @@ impl Workspace {
             .collect()
     }
 
-    /// Opens orphan `index` as an unsaved project and takes it over: it is
-    /// snapshotted in this session before the crashed session is deleted.
+    /// Opens orphan `index` as an unsaved project after the unsaved-changes
+    /// check, and takes it over: it is snapshotted in this session before
+    /// the crashed session is deleted.
     pub(crate) fn restore_orphan(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if index >= self.recovery.orphans.len() || !self.confirm_discard(window, cx) {
+        if self.is_asking() {
             return;
         }
+        let Some(dir) = self.recovery.orphans.get(index).map(|o| o.dir.clone()) else {
+            return;
+        };
+        self.after_unsaved_check(
+            move |this, window, cx| this.restore_orphan_in(dir, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Restores the orphan recovered from `dir`, if it is still offered
+    /// (the question before may have taken a while).
+    fn restore_orphan_in(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.orphan_index(&dir) else {
+            return;
+        };
         let orphan = self.recovery.orphans.remove(index);
         let source = orphan.snapshot.source.clone();
         let name = orphan.snapshot.project.name.clone();
@@ -179,6 +197,11 @@ impl Workspace {
         ));
         self.focus_editor(window, cx);
         cx.notify();
+    }
+
+    /// Index of the orphan recovered from `dir`.
+    fn orphan_index(&self, dir: &Path) -> Option<usize> {
+        self.recovery.orphans.iter().position(|o| o.dir == dir)
     }
 
     /// Copies the restored project into this session, then deletes the

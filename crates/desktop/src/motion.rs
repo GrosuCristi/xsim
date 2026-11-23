@@ -12,10 +12,9 @@
 //! animate a window as it appears.)
 //!
 //! Reduced motion also settles the kit's other transitions on their first
-//! frame. Toasts appear and leave at once but keep their lifecycle and
-//! timeout. Tab highlights, tooltips and scrollbar fades no longer move,
-//! and the progress bar steps instead of easing. The kit's spinner stands
-//! still too, so the run loader turns its own ([`crate::ui::spinner`]).
+//! frame. Tab highlights, tooltips and scrollbar fades no longer move, and
+//! the progress bar steps instead of easing. The kit's spinner stands still
+//! too, so the run loader turns its own ([`crate::ui::spinner`]).
 
 use gpui_kit::App;
 

@@ -3,9 +3,7 @@
 use super::Workspace;
 use super::circuit_tab::CircuitTab;
 use crate::ids::TabId;
-use crate::ui::toast;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::{prelude::*, *};
 use xsim_project::CircuitDocument;
 
@@ -50,23 +48,60 @@ impl Workspace {
     }
 
     /// Deletes circuit `index` after confirmation; the last circuit stays.
+    /// The question is answered asynchronously (D25), so the circuit is
+    /// found again by its tab when the answer arrives.
     pub(super) fn delete_circuit(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.doc.read_only || self.tabs.len() <= 1 || index >= self.tabs.len() {
+        if self.is_asking() || !self.can_delete_circuit(index) {
             return;
         }
+        let id = self.tabs[index].id;
         let name = self.doc.project.circuits[index].name.clone();
-        let prompts = self.services.prompts.clone();
-        if !prompts.confirm_delete_circuit(&name, window) {
-            return;
-        }
+        self.ask(
+            move |prompts, window, cx| prompts.confirm_delete_circuit(&name, window, cx),
+            move |this, confirmed, window, cx| {
+                // While the question was open the project may have been
+                // replaced or its circuits changed.
+                let index = this
+                    .tab_index(id)
+                    .filter(|&index| confirmed && this.can_delete_circuit(index));
+                if let Some(index) = index {
+                    this.remove_circuit(index, window, cx);
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Whether circuit `index` exists and may be deleted: the project is
+    /// editable and keeps at least one circuit.
+    fn can_delete_circuit(&self, index: usize) -> bool {
+        !self.doc.read_only && self.tabs.len() > 1 && index < self.tabs.len()
+    }
+
+    /// Removes circuit `index` with its results and problems, keeping the
+    /// shown circuit shown when it is another one.
+    pub(super) fn remove_circuit(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let tab = self.tabs.remove(index);
         self.doc.project.circuits.remove(index);
         self.diagnostics.clear_circuit(tab.id);
+        if self
+            .renaming
+            .as_ref()
+            .is_some_and(|rename| rename.tab == tab.id)
+        {
+            self.renaming = None;
+        }
         let active = self.doc.project.active_circuit;
         let active = if active > index || active >= self.tabs.len() {
             active.saturating_sub(1)
@@ -105,7 +140,7 @@ impl Workspace {
     }
 
     /// Applies the typed name. An invalid name keeps the editor open after
-    /// Enter (with a message) and is dropped when focus leaves.
+    /// Enter and is dropped when focus leaves.
     pub(super) fn commit_rename(
         &mut self,
         explicit: bool,
@@ -138,9 +173,7 @@ impl Workspace {
                 }
                 self.focus_editor(window, cx);
             }
-            Err(message) if explicit => {
-                toast(Notification::warning(message), window, cx);
-            }
+            Err(_) if explicit => {}
             Err(_) => self.renaming = None,
         }
         cx.notify();

@@ -39,9 +39,11 @@ pub(crate) fn open(
     cx: &mut App,
 ) {
     ensure_key_bindings(cx);
-    let options = DialogOptions::new("library", title(filter), WIDTH)
-        .resizable(HEIGHT, MIN_WIDTH, MIN_HEIGHT);
-    dialog_window::open(window, cx, options, move |window, cx| {
+    // Resizable, so the window opens at its size and nothing is measured:
+    // the content is built once.
+    let options = DialogOptions::new(title(filter), WIDTH).resizable(HEIGHT, MIN_WIDTH, MIN_HEIGHT);
+    dialog_window::open(window, cx, options, move |_, window, cx| {
+        let (initial, on_pick) = (initial.clone(), on_pick.clone());
         let view = cx.new(|cx| LibraryView::new(filter, initial, on_pick, window, cx));
         focus_search(&view, window, cx);
         move |content: DialogContent, _: &mut Window, _: &mut App| {

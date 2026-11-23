@@ -1129,3 +1129,51 @@ fn the_toolbar_opens_the_library_and_a_double_click_places(cx: &mut TestAppConte
     cx.run_until_parked();
     assert_ne!(view(&cx), before, "the wheel moves the view again");
 }
+
+/// D24: on the owner's screen at 200% display scaling (a 1920 × 1030 px
+/// work area) and on a smaller one, at 100% and 150% UI scale, the library
+/// opens inside the work area with Cancel and the pick button in view.
+#[gpui_kit::test]
+fn the_library_window_fits_the_owners_screens(cx: &mut TestAppContext) {
+    let (_, mut cx) = editor_window(cx);
+    let main = cx.window_handle();
+    for (width, height) in [(1920., 1030.), (1280., 680.)] {
+        let area = Bounds::new(point(px(0.), px(0.)), size(px(width), px(height)));
+        for font_size in [16., 24.] {
+            cx.update(|window, cx| {
+                dialog_window::simulate_work_area(cx, Some(area));
+                Theme::update(cx, |theme| theme.font_size = px(font_size));
+                window.resize(area.size);
+                window.bounds_changed(cx);
+            });
+            cx.run_until_parked();
+            keys("p", &mut cx);
+            let case = format!("{font_size} px on {width} × {height}");
+            assert_ne!(cx.window_handle(), main, "{case}: the library opened");
+            let (bounds, viewport) =
+                cx.update(|window, _| (window.bounds(), window.viewport_size()));
+            let margin = dialog_window::SCREEN_MARGIN;
+            assert!(
+                bounds.left() >= margin
+                    && bounds.top() >= margin
+                    && bounds.right() <= area.right() - margin
+                    && bounds.bottom() <= area.bottom() - margin,
+                "{case}: {bounds:?} leaves the work area"
+            );
+            for button in ["library-cancel", "library-pick"] {
+                let shown = cx
+                    .debug_bounds(button)
+                    .unwrap_or_else(|| panic!("{case}: {button} is shown"));
+                assert!(
+                    shown.left() >= px(0.)
+                        && shown.top() >= px(0.)
+                        && shown.right() <= viewport.width
+                        && shown.bottom() <= viewport.height,
+                    "{case}: {button} {shown:?} outside {viewport:?}"
+                );
+            }
+            press("escape", &mut cx);
+            assert_eq!(cx.window_handle(), main, "{case}: closed");
+        }
+    }
+}

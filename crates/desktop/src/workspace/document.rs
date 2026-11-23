@@ -1,39 +1,71 @@
 //! Project files (Q31–Q46): new, open, save, save as, close and the
 //! unsaved-changes check. Saving is manual only (Q40).
+//!
+//! D25: the questions these commands ask are answered asynchronously
+//! ([`Workspace::ask`]), so each command takes what it does after the
+//! answer as a continuation. While a question is open, the commands that
+//! could ask another one do nothing.
 
 use super::{DocumentState, Workspace};
 use crate::diagnostics::{Diagnostic, Severity, Source};
 use crate::files;
 use crate::prompts::UnsavedChoice;
-use crate::ui::toast;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::{prelude::*, *};
 use std::path::{Path, PathBuf};
 use xsim_project::{Compatibility, LoadedProject, Project, SCHEMA_VERSION};
 
+/// What a command does once its question has been answered.
+pub(super) trait Then:
+    FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static
+{
+}
+
+impl<F> Then for F where F: FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static {}
+
 impl Workspace {
     /// File > New project.
     pub(super) fn new_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_discard(window, cx) {
-            self.replace_document(DocumentState::untitled(), cx);
-            self.focus_editor(window, cx);
+        if self.is_asking() {
+            return;
         }
+        self.after_unsaved_check(
+            |this, window, cx| {
+                this.replace_document(DocumentState::untitled(), cx);
+                this.focus_editor(window, cx);
+            },
+            window,
+            cx,
+        );
     }
 
-    /// File > Open.
+    /// File > Open: picks a file, then checks for unsaved changes.
     pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let prompts = self.services.prompts.clone();
-        if let Some(path) = prompts.open_project(window) {
-            self.open_path(path, window, cx);
+        if self.is_asking() {
+            return;
         }
+        self.ask(
+            |prompts, window, cx| prompts.open_project(window, cx),
+            |this, path, window, cx| {
+                if let Some(path) = path {
+                    this.open_path(path, window, cx);
+                }
+            },
+            window,
+            cx,
+        );
     }
 
     /// Opens `path` after the unsaved-changes check (also used by Open
     /// recent).
     pub(super) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_discard(window, cx) {
-            self.load_path(path, window, cx);
+        if self.is_asking() {
+            return;
         }
+        self.after_unsaved_check(
+            move |this, window, cx| this.load_path(path, window, cx),
+            window,
+            cx,
+        );
     }
 
     /// Loads `path` into the window, reporting failures in the dock.
@@ -87,24 +119,51 @@ impl Workspace {
         cx.notify();
     }
 
-    /// File > Save; the first save asks for a path. Returns whether the
-    /// project was written.
-    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        match self.doc.path.clone() {
-            Some(path) if !self.doc.read_only => self.write_to(path, window, cx),
-            _ => self.save_as(window, cx),
+    /// File > Save; the first save asks for a path.
+    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_asking() {
+            self.save_then(|_, _, _| {}, window, cx);
         }
     }
 
     /// File > Save as. For a read-only project from a newer xsim this saves
     /// a copy in the current schema, which is then editable.
-    pub(super) fn save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let suggested = self.suggested_save_path();
-        let prompts = self.services.prompts.clone();
-        match prompts.save_project(&suggested, window) {
-            Some(path) => self.write_to(files::with_project_extension(path), window, cx),
-            None => false,
+    pub(super) fn save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_asking() {
+            self.save_as_then(|_, _, _| {}, window, cx);
         }
+    }
+
+    /// Saves (asking for a path the first time), then runs `then` once the
+    /// project is written; a failed or cancelled save skips it.
+    fn save_then(&mut self, then: impl Then, window: &mut Window, cx: &mut Context<Self>) {
+        match self.doc.path.clone() {
+            Some(path) if !self.doc.read_only => {
+                if self.write_to(path, window, cx) {
+                    then(self, window, cx);
+                }
+            }
+            _ => self.save_as_then(then, window, cx),
+        }
+    }
+
+    /// Asks where to save, writes there, then runs `then`; a cancelled or
+    /// failed save skips it.
+    fn save_as_then(&mut self, then: impl Then, window: &mut Window, cx: &mut Context<Self>) {
+        let suggested = self.suggested_save_path();
+        self.ask(
+            move |prompts, window, cx| prompts.save_project(&suggested, window, cx),
+            move |this, path, window, cx| {
+                let Some(path) = path else {
+                    return;
+                };
+                if this.write_to(files::with_project_extension(path), window, cx) {
+                    then(this, window, cx);
+                }
+            },
+            window,
+            cx,
+        );
     }
 
     /// Where Save as starts: the current file, the file a recovered project
@@ -141,11 +200,6 @@ impl Workspace {
         self.diagnostics.clear_source(Source::File, None);
         self.remember_recent(&path);
         self.clear_snapshot();
-        toast(
-            Notification::success(format!("Saved {}", self.doc.project.name)),
-            window,
-            cx,
-        );
         cx.notify();
         true
     }
@@ -167,39 +221,72 @@ impl Workspace {
         self.new_project(window, cx);
     }
 
-    /// File > Exit: closes the window (and the application) after the
-    /// unsaved-changes check.
+    /// File > Exit and the title bar's close button: closes the window
+    /// (and with it the application) after the unsaved-changes check.
     pub(super) fn exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.prepare_to_close(window, cx) {
+        if self.request_close(window, cx) {
             window.remove_window();
         }
     }
 
-    /// Called before the window closes: `false` keeps it open. On a clean
-    /// close the recovery session ends, deleting its snapshot.
-    pub(super) fn prepare_to_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.confirm_discard(window, cx) {
+    /// The window is asked to close; `true` when it may close now. A clean
+    /// project ends the session at once. With unsaved changes the window
+    /// stays open while the question is asked: Save (once written) or Don't
+    /// save then closes it, Cancel keeps it. While a question is open, a
+    /// repeated close request is ignored.
+    pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.is_asking() {
             return false;
         }
+        if !self.doc.dirty {
+            self.end_session();
+            return true;
+        }
+        self.after_unsaved_check(
+            |this, window, _| {
+                this.end_session();
+                window.remove_window();
+            },
+            window,
+            cx,
+        );
+        false
+    }
+
+    /// A clean close: runs stop and the recovery session ends, deleting
+    /// its snapshot.
+    fn end_session(&mut self) {
         for tab in &mut self.tabs {
             tab.run = None;
         }
         self.end_recovery();
-        true
     }
 
-    /// The unsaved-changes check: `true` when the current project may be
-    /// replaced (it was saved, the user discarded it, or it is clean).
-    pub(super) fn confirm_discard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// The unsaved-changes check: runs `then` once the current project may
+    /// be replaced: at once when it has no unsaved changes, otherwise after
+    /// the user saved it or chose not to. Cancel, or a save that is
+    /// cancelled or fails, skips `then`.
+    pub(super) fn after_unsaved_check(
+        &mut self,
+        then: impl Then,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.doc.dirty {
-            return true;
+            then(self, window, cx);
+            return;
         }
-        let prompts = self.services.prompts.clone();
-        match prompts.unsaved_changes(&self.doc.project.name, window) {
-            UnsavedChoice::Save => self.save(window, cx),
-            UnsavedChoice::Discard => true,
-            UnsavedChoice::Cancel => false,
-        }
+        let project = self.doc.project.name.clone();
+        self.ask(
+            move |prompts, window, cx| prompts.unsaved_changes(&project, window, cx),
+            move |this, choice, window, cx| match choice {
+                UnsavedChoice::Save => this.save_then(then, window, cx),
+                UnsavedChoice::Discard => then(this, window, cx),
+                UnsavedChoice::Cancel => {}
+            },
+            window,
+            cx,
+        );
     }
 
     /// Moves `path` to the top of the recent list (Q46).
@@ -215,21 +302,15 @@ impl Workspace {
         self.recent = app_data.recent();
     }
 
-    /// Lists a problem and shows it as a toast.
+    /// Lists a problem in the diagnostics dock and opens the dock on errors.
     pub(super) fn report(
         &mut self,
         severity: Severity,
         source: Source,
         message: String,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let note = match severity {
-            Severity::Error => Notification::error(message.clone()),
-            Severity::Warning => Notification::warning(message.clone()),
-            Severity::Info => Notification::info(message.clone()),
-        };
-        toast(note, window, cx);
         let opened = self
             .diagnostics
             .push(Diagnostic::project(severity, source, message));

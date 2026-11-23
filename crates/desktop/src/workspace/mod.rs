@@ -14,6 +14,7 @@
 //! * [`run`] — starting, pausing and stopping simulations.
 //! * [`commands`] — edit forwarding, appearance, dock and plot commands.
 //! * [`recovery`] — crash-recovery snapshots and restore (Q41).
+//! * [`Workspace::ask`] — native questions, answered asynchronously (D25).
 //! * rendering: [`render`], [`title_bar`], [`tab_strip`], [`run_controls`],
 //!   [`main_area`], [`diagnostics_dock`], [`status_bar`].
 
@@ -35,13 +36,15 @@ mod title_bar;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
+mod prompt_tests;
+#[cfg(test)]
 mod tests;
 
 pub use title_bar::dialog_logo;
 
 use crate::diagnostics::Diagnostics;
 use crate::ids::TabIdAllocator;
-use crate::prompts::{NativePrompts, Prompts};
+use crate::prompts::{Answer, NativePrompts, Prompts};
 use circuit_tab::CircuitTab;
 use circuits::Rename;
 use gpui_kit::{prelude::*, *};
@@ -119,6 +122,9 @@ pub struct Workspace {
     run_analysis_shown: Option<&'static str>,
     /// Counts started runs so a late outcome never lands in a newer run.
     run_generation: u64,
+    /// A native question is open (D25). Commands that would ask another
+    /// one are ignored until it is answered.
+    asking: bool,
     focus: FocusHandle,
     /// The Run and analysis settings buttons' focus (D20: reached with Tab
     /// in the tab bar), kept here so it survives re-renders and tests can
@@ -157,6 +163,7 @@ impl Workspace {
             reveal_active_tab: TabReveal::Pending,
             run_analysis_shown: None,
             run_generation: 0,
+            asking: false,
             run_focus: cx.focus_handle(),
             settings_focus: cx.focus_handle(),
             window: window.window_handle(),
@@ -249,13 +256,54 @@ impl Workspace {
     }
 
     /// Asks before the window closes with unsaved changes, and releases the
-    /// recovery session on a clean exit.
+    /// recovery session on a clean exit. The platform needs its answer at
+    /// once, so with unsaved changes the window stays open while the
+    /// question is asked and closes itself after Save or Don't save
+    /// ([`Self::request_close`]).
     fn guard_window_close(&self, window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            this.update(cx, |this, cx| this.prepare_to_close(window, cx))
+            this.update(cx, |this, cx| this.request_close(window, cx))
                 .unwrap_or(true)
         });
+    }
+
+    /// Whether a native question is open; commands that would ask another
+    /// one do nothing meanwhile.
+    fn is_asking(&self) -> bool {
+        self.asking
+    }
+
+    /// Asks a native question without blocking (D25): `question` opens the
+    /// dialog over `window` and returns at once; `then` gets the answer in
+    /// a later task, after the dialog has closed and outside any GPUI
+    /// callback. A dialog shown inside a callback would run a nested event
+    /// loop in which GPUI's tasks find the App borrowed and panic, which
+    /// aborts the process.
+    ///
+    /// Until the answer arrives [`Self::is_asking`] holds. The state the
+    /// question was about may have changed meanwhile, so `then` must find
+    /// what it acts on again (by tab id, not index).
+    fn ask<T: 'static>(
+        &mut self,
+        question: impl FnOnce(&dyn Prompts, &mut Window, &mut App) -> Answer<T>,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.asking = true;
+        let prompts = self.services.prompts.clone();
+        let answer = question(prompts.as_ref(), window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = answer.await;
+            // Nothing to do when the window has gone meanwhile.
+            this.update_in(cx, |this, window, cx| {
+                this.asking = false;
+                then(this, answer, window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 

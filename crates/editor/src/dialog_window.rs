@@ -1,4 +1,4 @@
-//! Modal dialogs in their own operating-system windows (D22).
+//! Modal dialogs in their own operating-system windows (D22, D24).
 //!
 //! [`open`] shows a dialog in a new window centred over the window it was
 //! opened from, its *owner*, and keeps the owner out of reach until the
@@ -16,18 +16,49 @@
 //!   a window control and no tab stop. Dragging the row moves the window.
 //!   There is no minimize or maximize button.
 //! * The content and the footer below it, with the kit dialog's 16 px
-//!   padding. The width follows the UI scale (it is given in rems). A dialog
-//!   that fits its content measures it after each layout and resizes its
-//!   window to match, keeping the top left corner where it is (GPUI cannot
-//!   move a window once it is open) and the window on the screen. So its
-//!   first height is an estimate, which the caller gives for the variant of
-//!   its content (see [`DialogOptions::new`]'s `id`), and later openings of
-//!   the same variant replace it with the measured one. When the content is
-//!   taller than the screen allows, it scrolls, footer included.
-//!   A resizable dialog (the library) starts at a given size and its content
-//!   fills the window.
+//!   padding. The width follows the UI scale (it is given in rems).
 //! * Nothing animates (D19); only the operating system may animate the
 //!   window as it appears.
+//!
+//! ## Its size and place (D24)
+//!
+//! A dialog that fits its content opens exactly as high as its content and
+//! footer are, centred over its owner and inside the screen's work area,
+//! [`SCREEN_MARGIN`] from its edges. GPUI cannot move a window once it is
+//! open, and on Windows not even before a hidden window is first shown (it
+//! then takes the bounds it was created with), so the window cannot open
+//! at a guess and fit afterwards. Instead [`open`] first builds the content
+//! in a hidden *probe* window, which GPUI lays out with the real fonts and
+//! UI scale as it opens, reads the content's natural height there and
+//! closes the probe, which is never shown; then it opens the dialog's
+//! window at the measured size. The content is built twice for this: its
+//! build function must not reach outside the window it is given (see
+//! [`open`]).
+//!
+//! Content can change while the dialog is open: another waveform or
+//! analysis type, more options, another UI scale. The window keeps fitting
+//! it, growing or shrinking downward and to the right (its top left corner
+//! stays). So that it stays on the screen as it grows, a dialog names the
+//! states its content can reach ([`DialogOptions::reserve_states`],
+//! [`DialogOptions::reserve_rem_size`]); the probe measures those too, and
+//! the window opens just as far up and to the left of centred as the
+//! largest of them needs to fit below and to the right of its corner. This
+//! is the one place where a dialog may open off centre.
+//!
+//! Content taller than the work area, or grown past what was reserved,
+//! scrolls; the footer with the dialog's buttons stays in view below it.
+//!
+//! On Windows the window's frame takes room from the size asked for: GPUI
+//! creates a dialog window 0 × 0 and measures its frame then, as nothing,
+//! so the frame (left, right and bottom; about 13 × 6.5 px at 200% display
+//! scaling) comes out of the content area. A dialog that fits its content
+//! therefore asks for its content's size plus the frame, which it reads as
+//! the window's outer size less its content area. The frame is learnt from
+//! the first such dialog at each display scale: that one opens a frame too
+//! small and grows by it at once, the next ones open at their size.
+//!
+//! A resizable dialog (the library) opens at a given size, within the work
+//! area, and its content fills the window.
 //!
 //! ## Modality
 //!
@@ -71,14 +102,14 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Bounds, Context,
-    Decorations, FocusHandle, Global, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement, Pixels, Render, ScrollHandle, SharedString, Size,
+    Decorations, DisplayId, Div, Element, ElementId, FocusHandle, Global, GlobalElementId,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton, ParentElement,
+    Pixels, PlatformDisplay, Render, ScrollHandle, SharedString, Size,
     StatefulInteractiveElement as _, Styled as _, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowControlArea, WindowId, WindowKind, WindowOptions, canvas, div, point,
     prelude::FluentBuilder as _, px, size,
 };
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// The kit's padding around a dialog's content.
@@ -88,13 +119,30 @@ pub const PADDING: Pixels = px(16.);
 /// Escape into [`Cancel`] and Enter into [`Confirm`].
 const DIALOG_CONTEXT: &str = "Dialog";
 
-/// Room kept between a dialog and the edges of the screen.
-const SCREEN_MARGIN: Pixels = px(16.);
+/// Room kept between a dialog and the edges of the screen's work area.
+pub const SCREEN_MARGIN: Pixels = px(16.);
+
+/// Size asked for the hidden window that measures a dialog's content. It
+/// does not matter, and is deliberately unlike any dialog's: the content is
+/// laid out at the dialog's own width and its natural height whatever the
+/// window's size (on Windows a hidden window has the system's default size,
+/// not the one asked for).
+const PROBE_SIZE: Size<Pixels> = Size {
+    width: px(120.),
+    height: px(80.),
+};
 
 /// Height of the title row: the kit's title bar at 100% UI scale, growing
 /// with the scale beyond it.
 fn title_bar_height(rem: Pixels) -> Pixels {
     TITLE_BAR_HEIGHT.max(rem * 2.125)
+}
+
+/// Whether xsim draws the title row in `window`, or in a dialog opened from
+/// it: everywhere but where a Linux window manager decorates windows
+/// itself.
+fn draws_title_bar(window: &Window) -> bool {
+    !(cfg!(target_os = "linux") && matches!(window.window_decorations(), Decorations::Server))
 }
 
 /// Installs the modal layer in windows opened from now on, and the
@@ -134,6 +182,132 @@ pub fn set_title_icon(
     cx.set_global(TitleIconSlot(Rc::new(icon)));
 }
 
+/// The work area dialogs are placed in, when tests set one.
+struct WorkArea(Bounds<Pixels>);
+impl Global for WorkArea {}
+
+/// Places dialogs as on a screen whose work area (the screen less the
+/// taskbar) is `area`, or again on the owner's display with `None`. For
+/// tests: headless displays are 1920 × 1080 px with nothing taken.
+#[doc(hidden)]
+pub fn simulate_work_area(cx: &mut App, area: Option<Bounds<Pixels>>) {
+    match area {
+        Some(area) => cx.set_global(WorkArea(area)),
+        None if cx.has_global::<WorkArea>() => {
+            cx.remove_global::<WorkArea>();
+        }
+        None => {}
+    }
+}
+
+/// The frame of a dialog window that fits its content, as learnt at each
+/// display scale (see the [module](self)): what the platform takes from the
+/// size asked for, as width and height.
+#[derive(Default)]
+struct Frames(Vec<(u32, Size<Pixels>)>);
+impl Global for Frames {}
+
+/// The frame a test sets in place of the window's own.
+struct SimulatedFrame(Size<Pixels>);
+impl Global for SimulatedFrame {}
+
+/// Makes dialog windows take `frame` from the size they ask for, as Windows
+/// does, or measure their own again with `None`. For tests: headless
+/// windows have no frame. Only the measurement is simulated: a headless
+/// window still shows the whole size asked for.
+#[doc(hidden)]
+pub fn simulate_window_frame(cx: &mut App, frame: Option<Size<Pixels>>) {
+    match frame {
+        Some(frame) => cx.set_global(SimulatedFrame(frame)),
+        None if cx.has_global::<SimulatedFrame>() => {
+            cx.remove_global::<SimulatedFrame>();
+        }
+        None => {}
+    }
+}
+
+/// What the platform takes from the size `window` asked for: its outer size
+/// less its content area. Only Windows has one (see the [module](self)); it
+/// is nothing once GPUI measures the frame itself, as it does after a
+/// change of display scale.
+fn window_frame(window: &Window, cx: &App) -> Size<Pixels> {
+    if let Some(simulated) = cx.try_global::<SimulatedFrame>() {
+        return simulated.0;
+    }
+    if !cfg!(target_os = "windows") {
+        return Size::default();
+    }
+    let outer = window.window_bounds().get_bounds().size;
+    frame_between(outer, window.viewport_size(), window.scale_factor())
+}
+
+/// The frame between a window's `outer` size and its content area, `inner`,
+/// at display scale `scale`, in whole device pixels. Both sizes are device
+/// pixels divided by the scale, so their difference wavers in its last bits
+/// from one window size to the next; a window asking for its content plus
+/// that frame would then never settle.
+fn frame_between(outer: Size<Pixels>, inner: Size<Pixels>, scale: f32) -> Size<Pixels> {
+    let whole = |outer: Pixels, inner: Pixels| {
+        px(((outer - inner).as_f32() * scale).round().max(0.) / scale)
+    };
+    size(
+        whole(outer.width, inner.width),
+        whole(outer.height, inner.height),
+    )
+}
+
+/// The frame learnt for dialog windows at display scale `scale`; nothing
+/// before the first one has opened there.
+fn known_frame(scale: f32, cx: &App) -> Size<Pixels> {
+    cx.try_global::<Frames>()
+        .and_then(|frames| {
+            frames
+                .0
+                .iter()
+                .find(|(bits, _)| *bits == scale.to_bits())
+                .map(|(_, frame)| *frame)
+        })
+        .unwrap_or_default()
+}
+
+/// Remembers `frame` for dialog windows at display scale `scale`.
+fn learn_frame(scale: f32, frame: Size<Pixels>, cx: &mut App) {
+    if !cx.has_global::<Frames>() {
+        cx.set_global(Frames::default());
+    }
+    let frames = &mut cx.global_mut::<Frames>().0;
+    match frames.iter_mut().find(|(bits, _)| *bits == scale.to_bits()) {
+        Some(known) => known.1 = frame,
+        None => frames.push((scale.to_bits(), frame)),
+    }
+}
+
+/// Whether sizes `a` and `b` differ by less than half a device pixel at
+/// display scale `scale` each way: asking for one after the other would
+/// change nothing but rounding.
+fn same_device_size(a: Size<Pixels>, b: Size<Pixels>, scale: f32) -> bool {
+    let close = |a: Pixels, b: Pixels| ((a - b).abs() * scale) < px(0.5);
+    close(a.width, b.width) && close(a.height, b.height)
+}
+
+/// `size` with `frame` added: the outer size of a window whose content area
+/// is `size`.
+fn with_frame(size: Size<Pixels>, frame: Size<Pixels>) -> Size<Pixels> {
+    gpui_kit::size(size.width + frame.width, size.height + frame.height)
+}
+
+/// The work area of `display`, the screen a window at `owner` is on.
+fn work_area(
+    owner: Bounds<Pixels>,
+    display: Option<&dyn PlatformDisplay>,
+    cx: &App,
+) -> Bounds<Pixels> {
+    if let Some(area) = cx.try_global::<WorkArea>() {
+        return area.0;
+    }
+    display.map_or(owner, |display| display.visible_bounds())
+}
+
 /// Width of a dialog window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Width {
@@ -155,9 +329,8 @@ impl Width {
 /// How a dialog window gets its height.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Height {
-    /// Fits the content; the window opens `estimate` rems high until the
-    /// content has been measured once.
-    Fit { estimate: f32 },
+    /// Fits the content, measured before the window opens.
+    Fit,
     /// Starts `height` rems high and can be resized down to the minimum
     /// size, in rems; the content fills the window.
     Resizable {
@@ -170,24 +343,26 @@ enum Height {
 /// What kind of dialog window to open.
 #[derive(Debug, Clone)]
 pub struct DialogOptions {
-    id: SharedString,
     title: SharedString,
     width: Width,
     height: Height,
+    /// How many states of the content the window keeps room for, beyond
+    /// the one it opens with (see [`Build::Reserved`]).
+    reserved_states: usize,
+    /// A rem size (UI scale) the window keeps room for.
+    reserved_rem: Option<Pixels>,
 }
 
 impl DialogOptions {
     /// A dialog `width` rems wide (the whole window) whose height fits its
-    /// content. `id` names the kind of dialog, so a later opening can start
-    /// at the height measured this time: give content of different heights
-    /// (another waveform, another analysis) ids of their own. `title` is the
-    /// window's title until the content sets one.
-    pub fn new(id: impl Into<SharedString>, title: impl Into<SharedString>, width: f32) -> Self {
+    /// content. `title` is the window's title until the content sets one.
+    pub fn new(title: impl Into<SharedString>, width: f32) -> Self {
         Self {
-            id: id.into(),
             title: title.into(),
             width: Width::Window(width),
-            height: Height::Fit { estimate: 20. },
+            height: Height::Fit,
+            reserved_states: 0,
+            reserved_rem: None,
         }
     }
 
@@ -197,11 +372,21 @@ impl DialogOptions {
         self
     }
 
-    /// The height, in rems, to open at before the content has been measured.
-    pub fn estimated_height(mut self, rems: f32) -> Self {
-        if let Height::Fit { estimate } = &mut self.height {
-            *estimate = rems;
-        }
+    /// Keeps room on the screen for `states` other states of the content,
+    /// which it can reach while the dialog is open (another type of
+    /// waveform, say). Before the window opens, the build function is
+    /// called once for each with [`Build::Reserved`], in the hidden window
+    /// that measures the content, and the window opens where the largest of
+    /// them fits too (see the [module](self)).
+    pub fn reserve_states(mut self, states: usize) -> Self {
+        self.reserved_states = states;
+        self
+    }
+
+    /// Keeps room on the screen for the content at a rem size of `rem`: the
+    /// largest UI scale that can be chosen while the dialog is open.
+    pub fn reserve_rem_size(mut self, rem: Pixels) -> Self {
+        self.reserved_rem = Some(rem);
         self
     }
 
@@ -215,6 +400,17 @@ impl DialogOptions {
         };
         self
     }
+}
+
+/// Which content a dialog's build function makes (see [`open`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Build {
+    /// The content the dialog opens with.
+    Shown,
+    /// The content put in its reserved state `n`, one of those of
+    /// [`DialogOptions::reserve_states`]. It is only measured, in the
+    /// hidden window.
+    Reserved(usize),
 }
 
 /// Handles Enter that no control took; returns whether the dialog closes.
@@ -238,7 +434,8 @@ impl DialogContent {
         self
     }
 
-    /// The row of buttons under the content.
+    /// The row of buttons under the content. It stays in view when the
+    /// content scrolls.
     pub fn footer(mut self, footer: impl IntoElement) -> Self {
         self.footer = Some(footer.into_any_element());
         self
@@ -267,16 +464,22 @@ type ContentFn = Box<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogConte
 /// but bring the open dialog to the front when `owner` already owns one
 /// by then; [`dialog_of`] finds the new window.
 ///
-/// `build` runs once in the new window and returns the function that
-/// builds each frame of the content. Create the dialog's views there, with
-/// the window it is given: text inputs follow the focus of the window they
-/// were created in. Focus the control that should have the keyboard there
-/// too; otherwise the dialog itself takes it.
+/// `build` returns the function that builds each frame of the content, for
+/// the window it is given. Create the dialog's views there, with that
+/// window: text inputs follow the focus of the window they were created
+/// in. Focus the control that should have the keyboard there too;
+/// otherwise the dialog itself takes it. A dialog that fits its content
+/// calls it more than once: first in a hidden window that measures the
+/// content and closes again (with [`Build::Shown`] and each reserved state,
+/// and all of them again at a reserved rem size), then in the dialog's
+/// window. So `build` must leave everything outside the window it is given
+/// alone: no toasts, no changes to the application's entities, no focus
+/// elsewhere.
 pub fn open<R>(
     owner: &mut Window,
     cx: &mut App,
     options: DialogOptions,
-    build: impl FnOnce(&mut Window, &mut App) -> R + 'static,
+    build: impl Fn(Build, &mut Window, &mut App) -> R + 'static,
 ) where
     R: Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static,
 {
@@ -294,7 +497,7 @@ fn open_now<R>(
     owner: &mut Window,
     cx: &mut App,
     options: DialogOptions,
-    build: impl FnOnce(&mut Window, &mut App) -> R,
+    build: impl Fn(Build, &mut Window, &mut App) -> R + 'static,
 ) -> Option<AnyWindowHandle>
 where
     R: Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static,
@@ -307,8 +510,24 @@ where
     let rem = cx.theme().font_size;
     let owner_bounds = owner.bounds();
     let display = owner.display(cx);
-    let screen = display.as_ref().map(|display| display.visible_bounds());
-    let geometry = Geometry::new(&options, rem, owner_bounds, screen, cx);
+    let display_id = display.as_ref().map(|display| display.id());
+    let area = work_area(owner_bounds, display.as_deref(), cx);
+    let title_bar = draws_title_bar(owner);
+    let scale = owner.scale_factor();
+    let (probed, frame) = match options.height {
+        Height::Fit => {
+            let place = Place {
+                owner: owner_bounds,
+                area,
+                display: display_id,
+                title_bar,
+                frame: known_frame(scale, cx),
+            };
+            (probe(&options, rem, place, &build, cx), place.frame)
+        }
+        Height::Resizable { .. } => (None, Size::default()),
+    };
+    let geometry = Geometry::new(&options, rem, owner_bounds, area, title_bar, probed, frame);
     let window_options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(geometry.bounds)),
         titlebar: Some(TitlebarOptions {
@@ -320,14 +539,13 @@ where
         is_resizable: geometry.min_size.is_some(),
         is_minimizable: false,
         window_min_size: geometry.min_size,
-        display_id: display.map(|display| display.id()),
+        display_id,
         app_owns_titlebar_drag: true,
         ..WindowOptions::default()
     };
-    let limits = geometry.limits;
     let opened = gpui_kit::open_window(window_options, cx, move |window, cx| {
-        let content = build(window, cx);
-        let view = cx.new(|cx| DialogWindow::new(options, limits, Box::new(content), window, cx));
+        let content = build(Build::Shown, window, cx);
+        let view = cx.new(|cx| DialogWindow::new(options, geometry, Box::new(content), window, cx));
         if window.focused(cx).is_none() {
             view.read(cx).focus.clone().focus(window, cx);
         }
@@ -347,6 +565,265 @@ where
         })
     });
     Some(handle)
+}
+
+/// Where a dialog is about to open.
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    /// The owner's bounds.
+    owner: Bounds<Pixels>,
+    /// The work area of the owner's screen.
+    area: Bounds<Pixels>,
+    display: Option<DisplayId>,
+    /// Whether the dialog will draw its title row.
+    title_bar: bool,
+    /// The window's frame, as far as known (see [`window_frame`]).
+    frame: Size<Pixels>,
+}
+
+/// What the probe measured.
+#[derive(Debug, Clone, Copy)]
+struct Probed {
+    /// Natural height of the content the dialog opens with, footer
+    /// included.
+    content: Pixels,
+    /// The largest content area the window can need while the dialog is
+    /// open, title row included: in any of its reserved states, at any
+    /// reserved rem size, within the work area.
+    reserve: Size<Pixels>,
+}
+
+/// Builds the content in a hidden window and measures it: as the dialog
+/// opens, and in each reserved state at each reserved rem size. GPUI lays
+/// a window out as it opens it, so the measurements are there once it is
+/// open; a second frame catches anything that settles only on it. `None`
+/// when nothing could be measured (in a test that skips drawing).
+fn probe<R>(
+    options: &DialogOptions,
+    rem: Pixels,
+    place: Place,
+    build: &impl Fn(Build, &mut Window, &mut App) -> R,
+    cx: &mut App,
+) -> Option<Probed>
+where
+    R: Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static,
+{
+    let mut rems = vec![rem];
+    rems.extend(options.reserved_rem.filter(|reserved| *reserved != rem));
+    let builds: Vec<Build> = std::iter::once(Build::Shown)
+        .chain((0..options.reserved_states).map(Build::Reserved))
+        .collect();
+    let cases: Vec<(Build, Pixels)> = rems
+        .iter()
+        .flat_map(|&rem| builds.iter().map(move |&build| (build, rem)))
+        .collect();
+    let heights: Vec<Rc<Cell<Option<Pixels>>>> = cases.iter().map(|_| Rc::default()).collect();
+    let window_options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: place.owner.origin,
+            size: PROBE_SIZE,
+        })),
+        titlebar: None,
+        focus: false,
+        show: false,
+        // Not a dialog: on Windows that would disable the active window.
+        kind: WindowKind::Normal,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: place.display,
+        ..WindowOptions::default()
+    };
+    let width = |rem: Pixels| {
+        options
+            .width
+            .resolve(rem)
+            .min(max_content(place.area, rem, place.frame).width)
+    };
+    let cells = heights.clone();
+    let opened = gpui_kit::open_window(window_options, cx, |window, cx| {
+        let entries = cases
+            .iter()
+            .zip(cells)
+            .map(|(&(case, rem), height)| ProbeEntry {
+                content: Box::new(build(case, window, cx)),
+                rem,
+                width: width(rem),
+                height,
+            })
+            .collect();
+        cx.new(|_| Probe { entries })
+    });
+    let (handle, view) = opened.ok()?;
+    drop(view);
+    handle
+        .update(cx, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.remove_window();
+        })
+        .ok();
+    let content = heights[0].get()?;
+    let mut reserve = Size::<Pixels>::default();
+    for ((_, rem), height) in cases.iter().zip(&heights) {
+        let Some(height) = height.get() else {
+            continue;
+        };
+        let bar = if place.title_bar {
+            title_bar_height(*rem)
+        } else {
+            px(0.)
+        };
+        let max = max_content(place.area, *rem, place.frame);
+        reserve.width = reserve.width.max(width(*rem));
+        reserve.height = reserve.height.max((bar + height).min(max.height));
+    }
+    Some(Probed { content, reserve })
+}
+
+/// One content the probe measures.
+struct ProbeEntry {
+    content: ContentFn,
+    /// The rem size it is laid out at.
+    rem: Pixels,
+    /// The dialog's width at that rem size.
+    width: Pixels,
+    /// Its natural height, content and footer, once laid out.
+    height: Rc<Cell<Option<Pixels>>>,
+}
+
+/// The root view of the probe: every content it measures, each at its
+/// width and rem size and as high as it is, out of the window's way.
+struct Probe {
+    entries: Vec<ProbeEntry>,
+}
+
+impl Render for Probe {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let surfaces: Vec<AnyElement> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let content = (entry.content)(DialogContent::default(), window, cx);
+                let DialogContent {
+                    children, footer, ..
+                } = content;
+                let height = entry.height.clone();
+                let measure = canvas(
+                    move |bounds, _, _| height.set(Some(bounds.size.height)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0();
+                let surface = v_flex()
+                    .relative()
+                    .w_full()
+                    .child(content_part(children))
+                    .children(footer.map(footer_part))
+                    .child(measure);
+                let placed = div()
+                    .id(("dialog-probe", index))
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w(entry.width)
+                    .child(surface)
+                    .into_any_element();
+                RemScope {
+                    rem: entry.rem,
+                    child: placed,
+                }
+                .into_any_element()
+            })
+            .collect();
+        div().size_full().overflow_hidden().children(surfaces)
+    }
+}
+
+/// Lays its child out, and paints it, at another rem size: the probe's
+/// view of content at another UI scale.
+struct RemScope {
+    rem: Pixels,
+    child: AnyElement,
+}
+
+impl IntoElement for RemScope {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for RemScope {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let child = &mut self.child;
+        let id = window.with_rem_size(Some(self.rem), |window| child.request_layout(window, cx));
+        (id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.child;
+        window.with_rem_size(Some(self.rem), |window| {
+            child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.child;
+        window.with_rem_size(Some(self.rem), |window| child.paint(window, cx));
+    }
+}
+
+/// The content of a dialog with the padding around it; below it, the gap
+/// to the footer. The same in the dialog's window and in the probe, which
+/// must measure what the window shows.
+fn content_part(children: Vec<AnyElement>) -> Div {
+    v_flex().w_full().p(PADDING).children(children)
+}
+
+/// The footer of a dialog with the padding beside and below it.
+fn footer_part(footer: AnyElement) -> Div {
+    div()
+        .flex_shrink_0()
+        .w_full()
+        .px(PADDING)
+        .pb(PADDING)
+        .child(footer)
 }
 
 /// Closes the dialog in `window` without applying anything and gives the
@@ -412,14 +889,126 @@ pub fn with_owner(window: &Window, cx: &mut App, f: impl FnOnce(&mut Window, &mu
 /// Gives the keyboard to the dialog in `window` itself, as when it opened
 /// without a control to focus: Tab then starts from its first control.
 pub fn focus_dialog(window: &mut Window, cx: &mut App) {
-    let dialog = window
-        .root::<Root>()
-        .flatten()
-        .and_then(|root| root.read(cx).view().clone().downcast::<DialogWindow>().ok());
-    if let Some(dialog) = dialog {
+    if let Some(dialog) = dialog_view(window, cx) {
         let focus = dialog.read(cx).focus.clone();
         focus.focus(window, cx);
     }
+}
+
+/// The dialog view at the root of `window`, if it shows a dialog.
+fn dialog_view(window: &Window, cx: &App) -> Option<gpui_kit::Entity<DialogWindow>> {
+    window
+        .root::<Root>()
+        .flatten()
+        .and_then(|root| root.read(cx).view().clone().downcast::<DialogWindow>().ok())
+}
+
+/// How a dialog window is laid out, for tests.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DialogLayout {
+    /// The window's bounds on the screen.
+    pub bounds: Bounds<Pixels>,
+    /// The size of the window's content area.
+    pub viewport: Size<Pixels>,
+    /// The height the title row, content and footer take without
+    /// scrolling, as last laid out.
+    pub natural_height: Pixels,
+    /// The footer's bounds in the window, as last laid out.
+    pub footer: Option<Bounds<Pixels>>,
+    /// Where the window may be: the work area it was placed in, less
+    /// [`SCREEN_MARGIN`] all round.
+    pub room: Bounds<Pixels>,
+    /// The frame a test simulates (see [`simulate_window_frame`]): what
+    /// Windows would take from the content area, which a headless window
+    /// does not.
+    pub frame: Size<Pixels>,
+}
+
+impl DialogLayout {
+    /// Checks the window against D24: it is inside the room; it shows all
+    /// its content without scrolling, or, when that is taller than the
+    /// room, it is as high as the room; and its footer is inside it. Each
+    /// to within a pixel, for rounding.
+    pub fn check(&self) -> Result<(), String> {
+        let slack = px(1.);
+        let (bounds, room) = (self.bounds, self.room);
+        if bounds.left() < room.left() - slack
+            || bounds.top() < room.top() - slack
+            || bounds.right() > room.right() + slack
+            || bounds.bottom() > room.bottom() + slack
+        {
+            return Err(format!("the window {bounds:?} leaves the room {room:?}"));
+        }
+        if (self.viewport.height - bounds.size.height).abs() > slack {
+            return Err(format!(
+                "the content area {:?} is not the window's {:?}",
+                self.viewport, bounds.size
+            ));
+        }
+        // What Windows would show inside the frame, and all of the content
+        // unless the room inside the frame is smaller.
+        let shown = self.viewport.height - self.frame.height;
+        let needed = self
+            .natural_height
+            .min(room.size.height - self.frame.height);
+        if shown + slack < needed {
+            return Err(format!(
+                "the window shows {shown:?} for {:?} of content in {:?} of room",
+                self.natural_height, room.size.height
+            ));
+        }
+        if let Some(footer) = self.footer
+            && (footer.top() < px(0.)
+                || footer.bottom() > self.viewport.height + slack
+                || footer.right() > self.viewport.width + slack)
+        {
+            return Err(format!(
+                "the footer {footer:?} is outside the window's {:?}",
+                self.viewport
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The layout of the dialog in `window`, if it shows one that fits its
+/// content. For tests.
+#[doc(hidden)]
+pub fn layout_of(window: AnyWindowHandle, cx: &mut App) -> Option<DialogLayout> {
+    window
+        .update(cx, |_, window, cx| {
+            let dialog = dialog_view(window, cx)?;
+            let dialog = dialog.read(cx);
+            if !dialog.fits_content() {
+                return None;
+            }
+            let bar = if draws_title_bar(window) {
+                title_bar_height(window.rem_size())
+            } else {
+                px(0.)
+            };
+            let natural = dialog.natural_height()?;
+            let area = dialog.area;
+            Some(DialogLayout {
+                bounds: window.bounds(),
+                viewport: window.viewport_size(),
+                natural_height: bar + natural,
+                footer: dialog.footer_bounds.get(),
+                frame: cx
+                    .try_global::<SimulatedFrame>()
+                    .map_or_else(Size::default, |simulated| simulated.0),
+                room: Bounds {
+                    origin: point(area.left() + SCREEN_MARGIN, area.top() + SCREEN_MARGIN),
+                    size: size(
+                        area.size.width - SCREEN_MARGIN * 2.,
+                        area.size.height - SCREEN_MARGIN * 2.,
+                    ),
+                },
+            })
+        })
+        .ok()
+        .flatten()
 }
 
 /// Activates the dialog at the top of `window`'s chain, if `window` owns
@@ -476,14 +1065,6 @@ struct Dialogs {
 
 impl Global for Dialogs {}
 
-/// Height in rems that each kind of dialog fitted as it opened last time,
-/// so the next one opens at it. Apart from [`Dialogs`], so that storing one
-/// redraws no window.
-#[derive(Default)]
-struct FittedHeights(HashMap<SharedString, f32>);
-
-impl Global for FittedHeights {}
-
 impl Dialogs {
     /// Forgets the dialog in window `id`; returns its owner.
     fn remove(&mut self, id: WindowId) -> Option<AnyWindowHandle> {
@@ -492,15 +1073,39 @@ impl Dialogs {
     }
 }
 
+/// The largest window that fits `area` (a work area) with
+/// [`SCREEN_MARGIN`] all round, but no smaller than 10 rem square.
+fn max_size(area: Bounds<Pixels>, rem: Pixels) -> Size<Pixels> {
+    size(
+        (area.size.width - SCREEN_MARGIN * 2.).max(rem * 10.),
+        (area.size.height - SCREEN_MARGIN * 2.).max(rem * 10.),
+    )
+}
+
+/// The largest content area of a window with `frame` that fits `area` as
+/// [`max_size`] says, but no smaller than 10 rem square.
+fn max_content(area: Bounds<Pixels>, rem: Pixels, frame: Size<Pixels>) -> Size<Pixels> {
+    let max = max_size(area, rem);
+    size(
+        (max.width - frame.width).max(rem * 10.),
+        (max.height - frame.height).max(rem * 10.),
+    )
+}
+
 /// Where a dialog window opens.
+#[derive(Debug, Clone, Copy)]
 struct Geometry {
+    /// The bounds asked for: the content area's and the frame's (see
+    /// [`window_frame`]).
     bounds: Bounds<Pixels>,
     min_size: Option<Size<Pixels>>,
+    /// The work area it is placed in.
+    area: Bounds<Pixels>,
     limits: Limits,
 }
 
 /// How far right and down a dialog window's edges may go as its content
-/// grows: to just inside the screen's.
+/// grows: to just inside the work area's.
 #[derive(Debug, Clone, Copy)]
 struct Limits {
     right: Pixels,
@@ -512,37 +1117,49 @@ impl Geometry {
         options: &DialogOptions,
         rem: Pixels,
         owner: Bounds<Pixels>,
-        screen: Option<Bounds<Pixels>>,
-        cx: &App,
+        area: Bounds<Pixels>,
+        title_bar: bool,
+        probed: Option<Probed>,
+        frame: Size<Pixels>,
     ) -> Self {
-        let area = screen.unwrap_or(owner);
-        let max_width = (area.size.width - SCREEN_MARGIN * 2.).max(rem * 10.);
-        let max_height = (area.size.height - SCREEN_MARGIN * 2.).max(rem * 10.);
-        let width = options.width.resolve(rem).min(max_width);
-        let (height, min_size) = match options.height {
-            Height::Fit { estimate } => {
-                let rems = cx
-                    .try_global::<FittedHeights>()
-                    .and_then(|heights| heights.0.get(&options.id).copied())
-                    .unwrap_or(estimate);
-                (rem * rems, None)
+        let max = max_content(area, rem, frame);
+        let width = options.width.resolve(rem).min(max.width);
+        let (height, reserve, min_size) = match options.height {
+            Height::Fit => {
+                let bar = if title_bar {
+                    title_bar_height(rem)
+                } else {
+                    px(0.)
+                };
+                match probed {
+                    Some(probed) => ((bar + probed.content).min(max.height), probed.reserve, None),
+                    // Nothing measured: as high as the screen allows, and
+                    // the fit to the content follows.
+                    None => (max.height, Size::default(), None),
+                }
             }
             Height::Resizable {
                 height,
                 min_width,
                 min_height,
             } => (
-                rem * height,
+                (rem * height).min(max.height),
+                Size::default(),
                 Some(size(
                     (rem * min_width).min(width),
-                    (rem * min_height).min(max_height),
+                    (rem * min_height).min(max.height),
                 )),
             ),
         };
-        let size = size(width, height.min(max_height));
         Self {
-            bounds: centred(owner, size, area),
+            bounds: placed(
+                owner,
+                with_frame(size(width, height), frame),
+                with_frame(reserve, frame),
+                area,
+            ),
             min_size,
+            area,
             limits: Limits {
                 right: area.right() - SCREEN_MARGIN,
                 bottom: area.bottom() - SCREEN_MARGIN,
@@ -551,18 +1168,24 @@ impl Geometry {
     }
 }
 
-/// Bounds of `size` centred over `owner`, moved inside `area` (the screen),
-/// [`SCREEN_MARGIN`] from its edges, where they would leave it: the room
-/// the fit to the content keeps (see [`Limits`]).
-fn centred(owner: Bounds<Pixels>, size: Size<Pixels>, area: Bounds<Pixels>) -> Bounds<Pixels> {
+/// Bounds of `size` centred over `owner`, then moved inside `area` (the
+/// work area), [`SCREEN_MARGIN`] from its edges, where they would leave
+/// it, and as far up and left as `reserve`, the largest size the window may
+/// grow to from its top left corner, needs to stay inside it too (see
+/// [`Limits`]).
+fn placed(
+    owner: Bounds<Pixels>,
+    size: Size<Pixels>,
+    reserve: Size<Pixels>,
+    area: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    let room = size.max(&reserve);
     let center = owner.center();
-    let mut x = center.x - size.width / 2.;
-    let mut y = center.y - size.height / 2.;
-    x = x
-        .min(area.right() - SCREEN_MARGIN - size.width)
+    let x = (center.x - size.width / 2.)
+        .min(area.right() - SCREEN_MARGIN - room.width)
         .max(area.left() + SCREEN_MARGIN);
-    y = y
-        .min(area.bottom() - SCREEN_MARGIN - size.height)
+    let y = (center.y - size.height / 2.)
+        .min(area.bottom() - SCREEN_MARGIN - room.height)
         .max(area.top() + SCREEN_MARGIN);
     Bounds {
         origin: point(x, y),
@@ -572,7 +1195,6 @@ fn centred(owner: Bounds<Pixels>, size: Size<Pixels>, area: Bounds<Pixels>) -> B
 
 /// The root view of a dialog window: title row, content and footer.
 struct DialogWindow {
-    id: SharedString,
     title: SharedString,
     /// The title last given to the operating system.
     shown_title: SharedString,
@@ -581,17 +1203,25 @@ struct DialogWindow {
     content: ContentFn,
     focus: FocusHandle,
     scroll: ScrollHandle,
-    /// Natural height of the content and footer, measured on the last
-    /// layout.
-    measured: Rc<Cell<Option<Pixels>>>,
-    /// The window size last asked for, so a size the platform rounds is not
-    /// asked for again and again.
+    /// Natural height of the content, padding included, measured on the
+    /// last layout.
+    content_height: Rc<Cell<Option<Pixels>>>,
+    /// Bounds of the footer, padding included, in the window on the last
+    /// layout; `None` without one.
+    footer_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The window size last asked for, frame included, so a size the
+    /// platform rounds is not asked for again and again: at first the size
+    /// the window opened at.
     requested: Option<Size<Pixels>>,
-    /// The UI scale the size was last fitted at.
-    fitted_rem: Option<Pixels>,
-    /// Whether the height of the content as it opened is remembered for
-    /// the next dialog of its kind.
-    remembered: bool,
+    /// Whether the window's frame has been measured and remembered for the
+    /// dialogs opened after it (see [`window_frame`]).
+    frame_learnt: bool,
+    /// The UI scale and content area the size was last fitted at. A new
+    /// content area means a new frame too, on Windows: after a change of
+    /// display scale GPUI measures the frame itself (see [`window_frame`]).
+    fitted: Option<(Pixels, Size<Pixels>)>,
+    /// The work area the window was placed in.
+    area: Bounds<Pixels>,
     limits: Limits,
     /// A press on the title row that may become a window move.
     should_move: bool,
@@ -601,7 +1231,7 @@ struct DialogWindow {
 impl DialogWindow {
     fn new(
         options: DialogOptions,
-        limits: Limits,
+        geometry: Geometry,
         content: ContentFn,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -617,7 +1247,6 @@ impl DialogWindow {
             target.focus(window, cx);
         });
         Self {
-            id: options.id,
             shown_title: SharedString::default(),
             title: options.title,
             width: options.width,
@@ -625,66 +1254,75 @@ impl DialogWindow {
             content,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            measured: Rc::default(),
-            requested: None,
-            fitted_rem: None,
-            remembered: false,
-            limits,
+            content_height: Rc::default(),
+            footer_bounds: Rc::default(),
+            requested: Some(geometry.bounds.size),
+            frame_learnt: false,
+            fitted: None,
+            area: geometry.area,
+            limits: geometry.limits,
             should_move: false,
             _focus_lost: focus_lost,
         }
     }
 
     fn fits_content(&self) -> bool {
-        matches!(self.height, Height::Fit { .. })
+        matches!(self.height, Height::Fit)
+    }
+
+    /// Natural height of the content and footer, as last laid out.
+    fn natural_height(&self) -> Option<Pixels> {
+        let content = self.content_height.get()?;
+        let footer = self.footer_bounds.get().map(|footer| footer.size.height);
+        Some(content + footer.unwrap_or_default())
     }
 
     /// Resizes the window to the measured content at the current UI scale,
-    /// within the screen: the top left corner stays, so the window gets no
-    /// wider or taller than the room left to the right and below.
+    /// within the work area: the top left corner stays, so the window gets
+    /// no wider or taller than the room left to the right and below. The
+    /// window opened at the measured size, so this changes nothing until
+    /// the content or the scale changes, unless the window's frame was not
+    /// known yet (see [`window_frame`]): the first fit then makes room for
+    /// it.
     fn fit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.fits_content() {
             return;
         }
-        let Some(content) = self.measured.get() else {
+        let frame = window_frame(window, cx);
+        if !self.frame_learnt {
+            self.frame_learnt = true;
+            learn_frame(window.scale_factor(), frame, cx);
+        }
+        let Some(natural) = self.natural_height() else {
             return;
         };
         let rem = window.rem_size();
-        let bar = if self.draws_title_bar(window) {
+        let bar = if draws_title_bar(window) {
             title_bar_height(rem)
         } else {
             px(0.)
         };
         let min_height = bar + rem * 3.;
         let origin = window.bounds().origin;
-        let height = (bar + content)
-            .min(self.limits.bottom - origin.y)
+        let height = (bar + natural)
+            .min(self.limits.bottom - origin.y - frame.height)
             .max(min_height);
         let width = self
             .width
             .resolve(rem)
-            .min(self.limits.right - origin.x)
+            .min(self.limits.right - origin.x - frame.width)
             .max(rem * 10.);
-        let wanted = size(width, height);
-        if self.requested == Some(wanted) {
+        let wanted = with_frame(size(width, height), frame);
+        if self
+            .requested
+            .is_some_and(|requested| same_device_size(requested, wanted, window.scale_factor()))
+        {
             return;
         }
         self.requested = Some(wanted);
-        if !self.remembered {
-            self.remembered = true;
-            cx.default_global::<FittedHeights>()
-                .0
-                .insert(self.id.clone(), height / rem);
-        }
         window.resize(wanted);
         // Headless windows report the new size only when told.
         window.bounds_changed(cx);
-    }
-
-    /// Whether xsim draws the title row: everywhere but where a Linux
-    /// window manager decorates the window itself.
-    fn draws_title_bar(&self, window: &Window) -> bool {
-        !(cfg!(target_os = "linux") && matches!(window.window_decorations(), Decorations::Server))
     }
 
     fn title_bar(
@@ -747,52 +1385,79 @@ impl DialogWindow {
             .into_any_element()
     }
 
+    /// The content and the footer under the title row. A dialog that fits
+    /// its content is as high as they are, or shrinks to the window, its
+    /// content scrolling above the footer; the content of a resizable one
+    /// fills the window.
     fn body(&self, content: DialogContent, cx: &mut Context<Self>) -> AnyElement {
         let DialogContent {
             children, footer, ..
         } = content;
-        let fill = !self.fits_content();
         let surface = v_flex()
             .debug_selector(|| "dialog-0".into())
             .w_full()
-            .py(PADDING)
-            .gap(PADDING)
-            .child(
-                v_flex()
-                    .w_full()
-                    .px(PADDING)
-                    .when(fill, |this| this.flex_1().min_h_0())
-                    .children(children),
-            )
-            .when_some(footer, |this, footer| {
-                this.child(div().flex_shrink_0().w_full().px(PADDING).child(footer))
-            });
-        if fill {
-            return surface.flex_1().min_h_0().into_any_element();
+            .min_h_0();
+        if !self.fits_content() {
+            return surface
+                .flex_1()
+                .child(content_part(children).flex_1().min_h_0())
+                .children(footer.map(footer_part))
+                .into_any_element();
         }
-        let measured = self.measured.clone();
+        // Each part records its bounds on every layout and refits the window
+        // when its height changed.
         let view = cx.weak_entity();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                if measured.get() != Some(bounds.size.height) {
-                    measured.set(Some(bounds.size.height));
-                    window.defer(cx, move |window, cx| {
-                        view.update(cx, |this, cx| this.fit(window, cx)).ok();
-                    });
-                }
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .inset_0();
-        div()
-            .id("dialog-scroll")
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .child(surface.relative().flex_shrink_0().child(measure))
+        let measure = move |record: Rc<dyn Fn(Bounds<Pixels>) -> bool>| {
+            let view = view.clone();
+            canvas(
+                move |bounds, window, cx| {
+                    if record(bounds) {
+                        window.defer(cx, move |window, cx| {
+                            view.update(cx, |this, cx| this.fit(window, cx)).ok();
+                        });
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0()
+        };
+        let content_height = self.content_height.clone();
+        let content_measure = measure(Rc::new(move |bounds: Bounds<Pixels>| {
+            content_height.replace(Some(bounds.size.height)) != Some(bounds.size.height)
+        }));
+        let footer = footer.map(|footer| {
+            let footer_bounds = self.footer_bounds.clone();
+            footer_part(footer)
+                .relative()
+                .debug_selector(|| "dialog-footer".into())
+                .child(measure(Rc::new(move |bounds: Bounds<Pixels>| {
+                    let old = footer_bounds.replace(Some(bounds));
+                    old.map(|old| old.size.height) != Some(bounds.size.height)
+                })))
+        });
+        if footer.is_none() {
+            self.footer_bounds.set(None);
+        }
+        surface
+            .flex_shrink_1()
+            .child(
+                div()
+                    .id("dialog-scroll")
+                    .flex_shrink_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(
+                        content_part(children)
+                            .relative()
+                            .flex_shrink_0()
+                            .debug_selector(|| "dialog-content".into())
+                            .child(content_measure),
+                    ),
+            )
+            .children(footer)
             .into_any_element()
     }
 }
@@ -835,17 +1500,16 @@ impl Render for DialogWindow {
             self.shown_title = title.clone();
         }
         let rem = window.rem_size();
-        if self.fitted_rem != Some(rem) {
-            self.fitted_rem = Some(rem);
+        let fitted = (rem, window.viewport_size());
+        if self.fitted != Some(fitted) {
+            self.fitted = Some(fitted);
             let view = cx.weak_entity();
             window.defer(cx, move |window, cx| {
                 view.update(cx, |this, cx| this.fit(window, cx)).ok();
             });
         }
         let on_ok = content.on_ok.clone();
-        let title_bar = self
-            .draws_title_bar(window)
-            .then(|| self.title_bar(title, window, cx));
+        let title_bar = draws_title_bar(window).then(|| self.title_bar(title, window, cx));
         let theme = cx.theme();
         v_flex()
             .id("dialog-window")
@@ -941,10 +1605,12 @@ impl RootPlugin for ModalShield {
 #[cfg(all(test, debug_assertions))]
 mod tests {
     use super::*;
+    use gpui_kit::component::Theme;
     use gpui_kit::{
         Entity, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseDownEvent, MouseUpEvent,
         ScrollDelta, ScrollEvent, TestAppContext, VisualContext as _, VisualTestContext, rems,
     };
+    use std::cell::RefCell;
 
     /// Window content that counts the input it gets.
     struct Owner {
@@ -983,33 +1649,46 @@ mod tests {
     };
 
     fn owner_window(cx: &mut TestAppContext) -> (Entity<Owner>, VisualTestContext) {
-        let (window, owner) = cx.update(|cx| {
+        owner_window_at(OWNER, cx)
+    }
+
+    /// An owner window at `bounds`, the first window of the test.
+    fn owner_window_at(
+        bounds: Bounds<Pixels>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<Owner>, VisualTestContext) {
+        cx.update(|cx| {
             gpui_kit::init(cx);
             cx.set_reduce_motion(true);
             init(cx);
-            gpui_kit::open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(OWNER)),
-                    ..WindowOptions::default()
-                },
-                cx,
-                |window, cx| {
-                    let owner = cx.new(|cx| Owner {
-                        focus: cx.focus_handle(),
-                        clicks: 0,
-                        keys: 0,
-                        presses: 0,
-                        scrolls: 0,
-                    });
-                    owner.read(cx).focus.clone().focus(window, cx);
-                    owner
-                },
-            )
-            .expect("test window")
         });
+        let (window, owner) = cx.update(|cx| second_owner(bounds, cx));
         let visual = VisualTestContext::from_window(window, cx);
         visual.run_until_parked();
         (owner, visual)
+    }
+
+    /// One more owner window at `bounds`, its content focused.
+    fn second_owner(bounds: Bounds<Pixels>, cx: &mut App) -> (AnyWindowHandle, Entity<Owner>) {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..WindowOptions::default()
+            },
+            cx,
+            |window, cx| {
+                let owner = cx.new(|cx| Owner {
+                    focus: cx.focus_handle(),
+                    clicks: 0,
+                    keys: 0,
+                    presses: 0,
+                    scrolls: 0,
+                });
+                owner.read(cx).focus.clone().focus(window, cx);
+                owner
+            },
+        )
+        .expect("test window")
     }
 
     /// How often Enter reached a test dialog.
@@ -1027,10 +1706,9 @@ mod tests {
             open(
                 window,
                 cx,
-                DialogOptions::new("test", "Test dialog", 0.)
-                    .content_width(12.)
-                    .estimated_height(10.),
-                move |_, _| {
+                DialogOptions::new("Test dialog", 0.).content_width(12.),
+                move |_, _, _| {
+                    let counter = counter.clone();
                     move |content: DialogContent, _: &mut Window, _: &mut App| {
                         let counter = counter.clone();
                         content
@@ -1051,10 +1729,120 @@ mod tests {
         (dialog, oks)
     }
 
+    /// Content of a sized test dialog: `height` high as it opens (a test may
+    /// change it while the dialog is open), `reserved[n]` high in reserved
+    /// state `n`, and a 2 rem footer.
+    struct Sized {
+        height: Rc<Cell<f32>>,
+        /// Heights in rems, or in pixels when `in_rems` is false.
+        in_rems: bool,
+        reserved: Vec<f32>,
+        /// The content each build was asked for, in order.
+        builds: Rc<RefCell<Vec<Build>>>,
+    }
+
+    impl Sized {
+        fn px(height: f32) -> Self {
+            Self {
+                height: Rc::new(Cell::new(height)),
+                in_rems: false,
+                reserved: Vec::new(),
+                builds: Rc::default(),
+            }
+        }
+
+        fn rems(height: f32) -> Self {
+            Self {
+                in_rems: true,
+                ..Self::px(height)
+            }
+        }
+
+        fn reserving(mut self, heights: &[f32]) -> Self {
+            self.reserved = heights.to_vec();
+            self
+        }
+
+        /// Opens the dialog with `options` over `cx`'s window; returns it.
+        fn open(&self, options: DialogOptions, cx: &mut VisualTestContext) -> AnyWindowHandle {
+            let (height, in_rems, reserved, builds) = (
+                self.height.clone(),
+                self.in_rems,
+                self.reserved.clone(),
+                self.builds.clone(),
+            );
+            let options = options.reserve_states(reserved.len());
+            cx.update(|window, cx| {
+                open(window, cx, options, move |build, _, _| {
+                    builds.borrow_mut().push(build);
+                    let fixed = match build {
+                        Build::Shown => None,
+                        Build::Reserved(n) => Some(reserved[n]),
+                    };
+                    let height = height.clone();
+                    move |content: DialogContent, _: &mut Window, _: &mut App| {
+                        let value = fixed.unwrap_or_else(|| height.get());
+                        let body = if in_rems {
+                            div().h(rems(value))
+                        } else {
+                            div().h(px(value))
+                        };
+                        content
+                            .title("Sized")
+                            .child(body.debug_selector(|| "test-body".into()))
+                            .footer(div().h(rems(2.)).debug_selector(|| "test-footer".into()))
+                    }
+                })
+            });
+            cx.run_until_parked();
+            let owner = cx.window_handle();
+            read(cx, |cx| dialog_of(owner, cx)).expect("the dialog opens")
+        }
+
+        /// Changes the shown content's height and lets the dialog refit.
+        fn set_height(&self, height: f32, dialog: AnyWindowHandle, cx: &mut VisualTestContext) {
+            self.height.set(height);
+            cx.cx
+                .update(|cx| dialog.update(cx, |_, window, _| window.refresh()))
+                .expect("the dialog is open");
+            cx.run_until_parked();
+        }
+    }
+
     fn bounds_of(window: AnyWindowHandle, cx: &mut VisualTestContext) -> Bounds<Pixels> {
         cx.cx
             .update(|cx| window.update(cx, |_, window, _| window.bounds()))
             .expect("an open window")
+    }
+
+    fn layout(window: AnyWindowHandle, cx: &mut VisualTestContext) -> DialogLayout {
+        cx.cx
+            .update(|cx| layout_of(window, cx))
+            .expect("a dialog that fits its content")
+    }
+
+    /// Checks `window` against D24 (see [`DialogLayout::check`]).
+    fn assert_fully_shown(window: AnyWindowHandle, case: &str, cx: &mut VisualTestContext) {
+        let layout = layout(window, cx);
+        if let Err(problem) = layout.check() {
+            panic!("{case}: {problem} ({layout:?})");
+        }
+        // Apart from the dialog's own measurements: content that fits is not
+        // cut off, but between the title row and the footer.
+        let mut dialog = VisualTestContext::from_window(window, &cx.cx);
+        let content = dialog.debug_bounds("dialog-content").expect("the content");
+        let bar = dialog
+            .debug_bounds("dialog-title-bar")
+            .map_or(px(0.), |bar| bar.bottom());
+        let floor = dialog
+            .debug_bounds("dialog-footer")
+            .map_or(layout.viewport.height, |footer| footer.top());
+        if layout.natural_height <= layout.room.size.height {
+            assert!(
+                content.top() >= bar - px(1.) && content.bottom() <= floor + px(1.),
+                "{case}: the content {content:?} is cut off between {bar:?} and {floor:?}"
+            );
+        }
     }
 
     /// Reads the application state.
@@ -1095,47 +1883,404 @@ mod tests {
         cx.update(|_, cx| cx.active_window())
     }
 
+    fn set_font_size(font_size: f32, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| Theme::update(cx, |theme| theme.font_size = px(font_size)));
+        cx.run_until_parked();
+    }
+
+    /// The owner's screen at 200% display scaling: a 1920 × 1030 px work
+    /// area (D24), and a smaller one.
+    const WORK_AREAS: [Bounds<Pixels>; 2] = [
+        Bounds {
+            origin: gpui_kit::Point {
+                x: px(0.),
+                y: px(0.),
+            },
+            size: Size {
+                width: px(1920.),
+                height: px(1030.),
+            },
+        },
+        Bounds {
+            origin: gpui_kit::Point {
+                x: px(0.),
+                y: px(0.),
+            },
+            size: Size {
+                width: px(1280.),
+                height: px(680.),
+            },
+        },
+    ];
+
+    /// D24: the dialog opens in its own window, at its measured height and
+    /// centred over its owner, at 100% and 150% UI scale. The hidden window
+    /// that measured it is gone, and the owner keeps its focus.
     #[gpui_kit::test]
     fn a_dialog_opens_in_its_own_window_centred_and_fitted(cx: &mut TestAppContext) {
-        let (_, mut main) = owner_window(cx);
+        let (owner, mut main) = owner_window(cx);
         let before = main.windows().len();
-        let (dialog, _) = open_test_dialog(&mut main, true);
-        let dialog = dialog.expect("the dialog opens");
-        assert_eq!(main.windows().len(), before + 1, "one more window");
-        assert_eq!(
-            read(&main, |cx| owner_of(dialog, cx)),
-            Some(main.window_handle())
-        );
-        assert_eq!(
-            read(&main, |cx| dialog_of(main.window_handle(), cx)),
-            Some(dialog)
-        );
-        assert!(read(&main, |cx| is_blocked(main.window_handle(), cx)));
-        let bounds = bounds_of(dialog, &mut main);
-        let rem = px(16.);
-        assert_eq!(bounds.size.width, rem * 12. + PADDING * 2.);
-        assert_eq!(bounds.center().x, OWNER.center().x, "centred across");
-        let estimate = rem * 10.;
-        assert_eq!(
-            bounds.origin.y,
-            OWNER.center().y - estimate / 2.,
-            "the top stays where the estimate centred it"
-        );
-        // Title row, padding, content, gap, footer, padding.
-        let fitted = title_bar_height(rem) + PADDING * 3. + px(200.) + rem * 2.;
-        assert_eq!(bounds.size.height, fitted, "fits its content");
-        let mut window = VisualTestContext::from_window(dialog, &main);
-        assert_eq!(window.window_title().as_deref(), Some("Test dialog"));
-        assert!(window.debug_bounds("dialog-title-bar").is_some());
-        assert!(window.debug_bounds("modal-shield").is_none());
-        assert!(main.debug_bounds("modal-shield").is_some());
+        for font_size in [16., 24.] {
+            set_font_size(font_size, &mut main);
+            let (dialog, _) = open_test_dialog(&mut main, true);
+            let dialog = dialog.expect("the dialog opens");
+            assert_eq!(main.windows().len(), before + 1, "one more window");
+            let active = active_window(&mut main);
+            assert!(
+                active.is_none_or(|active| active == dialog || active == main.window_handle()),
+                "the hidden window was never activated: {active:?}"
+            );
+            assert!(
+                main.update(|window, cx| owner.read(cx).focus.is_focused(window)),
+                "the owner kept its focus"
+            );
+            assert_eq!(
+                read(&main, |cx| owner_of(dialog, cx)),
+                Some(main.window_handle())
+            );
+            assert_eq!(
+                read(&main, |cx| dialog_of(main.window_handle(), cx)),
+                Some(dialog)
+            );
+            assert!(read(&main, |cx| is_blocked(main.window_handle(), cx)));
+            let bounds = bounds_of(dialog, &mut main);
+            let rem = px(font_size);
+            assert_eq!(bounds.size.width, rem * 12. + PADDING * 2.);
+            // Title row, padding, content, gap, footer, padding.
+            let fitted = title_bar_height(rem) + PADDING * 3. + px(200.) + rem * 2.;
+            assert_eq!(bounds.size.height, fitted, "fits its content");
+            assert_eq!(bounds.center(), OWNER.center(), "centred");
+            assert_fully_shown(dialog, "the test dialog", &mut main);
+            let mut window = VisualTestContext::from_window(dialog, &main);
+            assert_eq!(window.window_title().as_deref(), Some("Test dialog"));
+            assert!(window.debug_bounds("dialog-title-bar").is_some());
+            assert!(window.debug_bounds("modal-shield").is_none());
+            assert!(main.debug_bounds("modal-shield").is_some());
+            press("escape", &mut window);
+            assert_eq!(main.windows().len(), before);
+        }
+    }
 
-        // Measured once, the same dialog opens at its height, centred.
+    /// D24: the content is built once to be measured and once to be shown,
+    /// and once more for each reserved state, which is only measured.
+    #[gpui_kit::test]
+    fn the_content_is_measured_before_the_window_opens(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window(cx);
+        let plain = Sized::px(100.);
+        let dialog = plain.open(DialogOptions::new("Plain", 20.), &mut main);
+        assert_eq!(*plain.builds.borrow(), [Build::Shown, Build::Shown]);
+        let mut window = VisualTestContext::from_window(dialog, &main);
         press("escape", &mut window);
-        let (again, _) = open_test_dialog(&mut main, true);
-        let bounds = bounds_of(again.expect("opens again"), &mut main);
-        assert_eq!(bounds.size.height, fitted);
-        assert_eq!(bounds.center(), OWNER.center(), "centred");
+        let reserving = Sized::px(100.).reserving(&[300., 200.]);
+        let dialog = reserving.open(DialogOptions::new("Reserving", 20.), &mut main);
+        assert_eq!(
+            *reserving.builds.borrow(),
+            [
+                Build::Shown,
+                Build::Reserved(0),
+                Build::Reserved(1),
+                Build::Shown
+            ]
+        );
+        assert_eq!(main.windows().len(), 2, "the owner and the dialog");
+        let rem = px(16.);
+        let fitted = title_bar_height(rem) + PADDING * 3. + px(100.) + rem * 2.;
+        assert_eq!(
+            bounds_of(dialog, &mut main).size.height,
+            fitted,
+            "the window fits the content it shows"
+        );
+    }
+
+    /// D24: text that wraps at the dialog's width is measured at that width,
+    /// whatever the size of the hidden window that measures it: the window
+    /// opens centred at the height it then keeps.
+    #[gpui_kit::test]
+    fn wrapped_text_is_measured_at_the_dialog_width(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window(cx);
+        let text = "A long explanation that wraps onto several lines in a narrow \
+                    dialog, so the content's height depends on the dialog's width. "
+            .repeat(2);
+        main.update(|window, cx| {
+            open(
+                window,
+                cx,
+                DialogOptions::new("Wrapped", 16.),
+                move |_, _, _| {
+                    let text = text.clone();
+                    move |content: DialogContent, _: &mut Window, _: &mut App| {
+                        content
+                            .child(
+                                div()
+                                    .debug_selector(|| "wrapped".into())
+                                    .child(text.clone()),
+                            )
+                            .footer(div().h(rems(2.)))
+                    }
+                },
+            )
+        });
+        main.run_until_parked();
+        let dialog = read(&main, |cx| dialog_of(main.window_handle(), cx)).expect("open");
+        let mut window = VisualTestContext::from_window(dialog, &main);
+        let wrapped = window.debug_bounds("wrapped").expect("the text");
+        assert!(
+            wrapped.size.height > px(16.) * 4.,
+            "several lines: {wrapped:?}"
+        );
+        let bounds = bounds_of(dialog, &mut main);
+        assert_eq!(
+            bounds.center(),
+            OWNER.center(),
+            "centred, so never refitted"
+        );
+        assert_fully_shown(dialog, "wrapped text", &mut main);
+        let layout = layout(dialog, &mut main);
+        assert_eq!(bounds.size.height, layout.natural_height);
+    }
+
+    /// D24: on the owner's screens a dialog opens fully on screen; one taller
+    /// than the work area fills its height and scrolls its content, never
+    /// its footer.
+    #[gpui_kit::test]
+    fn a_dialog_fits_the_work_area_and_keeps_its_footer_in_view(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window_at(WORK_AREAS[1], cx);
+        for area in WORK_AREAS {
+            main.update(|_, cx| simulate_work_area(cx, Some(area)));
+            for (height, case) in [(300., "short"), (2000., "taller than the screen")] {
+                let sized = Sized::px(height);
+                let dialog = sized.open(DialogOptions::new("Sized", 20.), &mut main);
+                let case = format!("{case} on {:?}", area.size);
+                assert_fully_shown(dialog, &case, &mut main);
+                let mut window = VisualTestContext::from_window(dialog, &main);
+                let footer = window.debug_bounds("test-footer").expect("the footer");
+                let viewport = window.update(|window, _| window.viewport_size());
+                assert!(footer.bottom() <= viewport.height, "{case}: {footer:?}");
+                if height > area.size.height.as_f32() {
+                    let bounds = bounds_of(dialog, &mut main);
+                    assert_eq!(bounds.top(), area.top() + SCREEN_MARGIN, "{case}");
+                    assert_eq!(bounds.bottom(), area.bottom() - SCREEN_MARGIN, "{case}");
+                }
+                press("escape", &mut window);
+            }
+        }
+    }
+
+    /// D24: content that can grow while open opens where its tallest
+    /// reserved state fits below the window's top, and growing to it keeps
+    /// the window on the screen with all of it shown. Without the reserve,
+    /// the same growth would leave the screen's bottom.
+    #[gpui_kit::test]
+    fn a_dialog_opens_where_its_reserved_states_fit(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window_at(WORK_AREAS[0], cx);
+        let owner = main.update(|window, _| window.bounds());
+        for area in WORK_AREAS {
+            main.update(|_, cx| simulate_work_area(cx, Some(area)));
+            let tall = area.size.height.as_f32() - 260.;
+            for font_size in [16., 24.] {
+                set_font_size(font_size, &mut main);
+                let case = format!("{font_size} px on {:?}", area.size);
+                let sized = Sized::px(200.).reserving(&[tall, 100.]);
+                let dialog = sized.open(DialogOptions::new("Sized", 20.), &mut main);
+                assert_fully_shown(dialog, &case, &mut main);
+                let opened = bounds_of(dialog, &mut main);
+                let rem = px(font_size);
+                let reserve = title_bar_height(rem) + PADDING * 3. + px(tall) + rem * 2.;
+                let centred = owner.center().y - opened.size.height / 2.;
+                assert!(
+                    centred > area.bottom() - SCREEN_MARGIN - reserve,
+                    "{case}: the test needs the reserve to move the window"
+                );
+                assert_eq!(
+                    opened.top(),
+                    area.bottom() - SCREEN_MARGIN - reserve,
+                    "{case}: as near centred as the reserve allows"
+                );
+                sized.set_height(tall, dialog, &mut main);
+                assert_fully_shown(dialog, &format!("{case}, grown"), &mut main);
+                let grown = bounds_of(dialog, &mut main);
+                assert_eq!(grown.origin, opened.origin, "{case}: did not move");
+                assert_eq!(grown.size.height, reserve, "{case}: grown to its content");
+                let mut window = VisualTestContext::from_window(dialog, &main);
+                press("escape", &mut window);
+
+                let unreserved = Sized::px(200.);
+                let dialog = unreserved.open(DialogOptions::new("Sized", 20.), &mut main);
+                unreserved.set_height(tall, dialog, &mut main);
+                assert!(
+                    layout(dialog, &mut main).check().is_err(),
+                    "{case}: without the reserve the grown window is cut off"
+                );
+                let mut window = VisualTestContext::from_window(dialog, &main);
+                press("escape", &mut window);
+            }
+            set_font_size(16., &mut main);
+        }
+    }
+
+    /// D24 on Windows, whose frame comes out of the size a dialog asks for
+    /// (as GPUI measures it): the first dialog grows by its frame as soon as
+    /// it opens, the frame learnt; the next ones open at their content's
+    /// size plus the frame, centred. Either way the content area left inside
+    /// the frame holds all the content, and the whole window stays inside
+    /// the work area, as it grows to a reserved state too.
+    #[gpui_kit::test]
+    fn a_dialog_makes_room_for_the_window_frame(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window_at(WORK_AREAS[0], cx);
+        let owner = main.update(|window, _| window.bounds());
+        // Windows' at 200% display scaling: 13 device px each side and at
+        // the bottom.
+        let frame = size(px(13.), px(6.5));
+        let area = WORK_AREAS[0];
+        let room_bottom = area.bottom() - SCREEN_MARGIN;
+        main.update(|_, cx| {
+            simulate_work_area(cx, Some(area));
+            simulate_window_frame(cx, Some(frame));
+        });
+        let rem = px(16.);
+        let fitted = title_bar_height(rem) + PADDING * 3. + px(300.) + rem * 2.;
+        let width = rem * 20.;
+        for pass in ["the first", "the next"] {
+            let sized = Sized::px(300.);
+            let dialog = sized.open(DialogOptions::new("Sized", 20.), &mut main);
+            let bounds = bounds_of(dialog, &mut main);
+            assert_eq!(
+                bounds.size,
+                size(width + frame.width, fitted + frame.height),
+                "{pass}: the content's size and the frame's"
+            );
+            let layout = layout(dialog, &mut main);
+            assert!(
+                bounds.size.height - frame.height >= layout.natural_height,
+                "{pass}: the content area {bounds:?} less {frame:?} holds {:?}",
+                layout.natural_height
+            );
+            if pass == "the first" {
+                assert_eq!(
+                    bounds.top(),
+                    owner.center().y - fitted / 2.,
+                    "{pass}: opened as if it had no frame, grew below"
+                );
+            } else {
+                assert_eq!(bounds.center(), owner.center(), "{pass}: centred");
+            }
+            let mut window = VisualTestContext::from_window(dialog, &main);
+            press("escape", &mut window);
+        }
+        // Moved to a screen of another display scale, the window gets
+        // another size from Windows, and GPUI then measures the frame
+        // itself: the window fits its content again, with no frame added.
+        let sized = Sized::px(300.);
+        let dialog = sized.open(DialogOptions::new("Sized", 20.), &mut main);
+        main.cx
+            .update(|cx| {
+                simulate_window_frame(cx, Some(Size::default()));
+                dialog.update(cx, |_, window, cx| {
+                    window.resize(size(width + px(20.), fitted + px(10.)));
+                    window.bounds_changed(cx);
+                })
+            })
+            .expect("the dialog is open");
+        main.run_until_parked();
+        assert_eq!(
+            bounds_of(dialog, &mut main).size,
+            size(width, fitted),
+            "refitted, without a frame"
+        );
+        let mut window = VisualTestContext::from_window(dialog, &main);
+        press("escape", &mut window);
+        main.update(|_, cx| simulate_window_frame(cx, Some(frame)));
+        // Taller than the screen: the frame stays inside it too.
+        let tall = Sized::px(2000.);
+        let dialog = tall.open(DialogOptions::new("Tall", 20.), &mut main);
+        let bounds = bounds_of(dialog, &mut main);
+        assert_eq!(bounds.top(), area.top() + SCREEN_MARGIN);
+        assert_eq!(bounds.bottom(), room_bottom, "the frame included");
+        let mut window = VisualTestContext::from_window(dialog, &main);
+        press("escape", &mut window);
+        // Room kept for a taller state keeps room for the frame below it.
+        let reserve_content = 600.;
+        let sized = Sized::px(200.).reserving(&[reserve_content]);
+        let dialog = sized.open(DialogOptions::new("Sized", 20.), &mut main);
+        let reserve = title_bar_height(rem) + PADDING * 3. + px(reserve_content) + rem * 2.;
+        let opened = bounds_of(dialog, &mut main);
+        let centred = owner.center().y - opened.size.height / 2.;
+        assert!(
+            centred > room_bottom - reserve - frame.height,
+            "the test needs the reserve to move the window"
+        );
+        assert_eq!(opened.top(), room_bottom - reserve - frame.height);
+        sized.set_height(reserve_content, dialog, &mut main);
+        let grown = bounds_of(dialog, &mut main);
+        assert_eq!(grown.origin, opened.origin, "did not move");
+        assert_eq!(grown.size.height, reserve + frame.height, "grown to fit");
+        assert_eq!(grown.bottom(), room_bottom, "and inside the work area");
+    }
+
+    /// The frame read off a Windows window, whose sizes are device pixels
+    /// divided by the display scale, is the same to the bit whatever the
+    /// window's size, so a window asking for its content plus that frame
+    /// asks for the same size again after one resize: it settles.
+    #[test]
+    fn the_window_frame_is_the_same_at_every_window_size() {
+        for scale in [1., 1.25, 1.5, 1.75, 2., 2.25] {
+            for (fw, fh) in [(26, 13), (20, 10), (16, 8), (33, 17)] {
+                let device = |pixels: i32| px(pixels as f32 / scale);
+                let frame = size(device(fw), device(fh));
+                for step in 0..400 {
+                    // Content as tall and wide as a dialog's, in quarter
+                    // pixels, as layouts give them.
+                    let content =
+                        size(px(300. + step as f32 * 0.25), px(150. + step as f32 * 1.75));
+                    let asked = with_frame(content, frame);
+                    let outer = asked.to_device_pixels(scale);
+                    let outer_size = size(device(outer.width.0), device(outer.height.0));
+                    let inner = size(device(outer.width.0 - fw), device(outer.height.0 - fh));
+                    let read = frame_between(outer_size, inner, scale);
+                    assert_eq!(
+                        (
+                            read.width.as_f32().to_bits(),
+                            read.height.as_f32().to_bits()
+                        ),
+                        (
+                            frame.width.as_f32().to_bits(),
+                            frame.height.as_f32().to_bits()
+                        ),
+                        "at {scale} for {content:?}"
+                    );
+                    assert!(
+                        same_device_size(asked, with_frame(content, read), scale),
+                        "at {scale} for {content:?}: asks again for the same size"
+                    );
+                }
+            }
+        }
+    }
+
+    /// D24: a dialog that keeps room for a larger UI scale (the settings)
+    /// opens where it fits at that scale too, and is fully shown at every
+    /// scale up to it, wider and taller, without moving.
+    #[gpui_kit::test]
+    fn a_dialog_keeps_room_for_a_larger_ui_scale(cx: &mut TestAppContext) {
+        let (_, mut main) = owner_window_at(WORK_AREAS[1], cx);
+        main.update(|_, cx| simulate_work_area(cx, Some(WORK_AREAS[1])));
+        let sized = Sized::rems(12.);
+        let options = DialogOptions::new("Scaled", 30.).reserve_rem_size(px(32.));
+        let dialog = sized.open(options, &mut main);
+        assert_eq!(
+            *sized.builds.borrow(),
+            [Build::Shown, Build::Shown, Build::Shown]
+        );
+        let opened = bounds_of(dialog, &mut main);
+        assert_fully_shown(dialog, "100%", &mut main);
+        for font_size in [20., 24., 32.] {
+            set_font_size(font_size, &mut main);
+            let case = format!("{font_size} px");
+            assert_fully_shown(dialog, &case, &mut main);
+            let bounds = bounds_of(dialog, &mut main);
+            assert_eq!(bounds.origin, opened.origin, "{case}: did not move");
+            assert_eq!(bounds.size.width, px(30. * font_size), "{case}");
+        }
     }
 
     #[gpui_kit::test]
@@ -1377,8 +2522,8 @@ mod tests {
             open(
                 window,
                 cx,
-                DialogOptions::new("removable", "Removable", 20.),
-                move |window, cx| {
+                DialogOptions::new("Removable", 20.),
+                move |_, window, cx| {
                     let view = cx.new(|cx| Removable {
                         focus: cx.focus_handle(),
                         field: cx.focus_handle(),
@@ -1394,6 +2539,7 @@ mod tests {
         });
         main.run_until_parked();
         let dialog = read(&main, |cx| dialog_of(main.window_handle(), cx)).expect("open");
+        // The last build is the dialog window's.
         let view = content.take().expect("the content");
         let mut window = VisualTestContext::from_window(dialog, &main);
         let focused = |field: bool, window: &mut VisualTestContext| {
@@ -1415,45 +2561,27 @@ mod tests {
         assert!(!is_open(dialog, &main), "Escape closed the dialog");
     }
 
-    /// A dialog that grows with the UI scale while it is open (the settings)
-    /// stays on the screen: near its right edge the window gets no wider
-    /// than the room left, as it gets no taller than the room below.
+    /// A dialog that grows with the UI scale while it is open, without
+    /// keeping room for it, stays on the screen: near its right edge the
+    /// window gets no wider than the room left, as it gets no taller than
+    /// the room below.
     #[gpui_kit::test]
     fn a_dialog_growing_with_the_scale_stays_on_the_screen(cx: &mut TestAppContext) {
-        use gpui_kit::component::Theme;
         let (_, main) = owner_window(cx);
         // A second owner on the right of the 1920 × 1080 test screen.
         let bounds = Bounds {
             origin: point(px(1100.), px(100.)),
             size: size(px(800.), px(800.)),
         };
-        let (right, _) = cx.update(|cx| {
-            gpui_kit::open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..WindowOptions::default()
-                },
-                cx,
-                |_, cx| {
-                    cx.new(|cx| Owner {
-                        focus: cx.focus_handle(),
-                        clicks: 0,
-                        keys: 0,
-                        presses: 0,
-                        scrolls: 0,
-                    })
-                },
-            )
-            .expect("a second owner")
-        });
+        let (right, _) = cx.update(|cx| second_owner(bounds, cx));
         let mut owner = VisualTestContext::from_window(right, &main);
         owner.run_until_parked();
         owner.update(|window, cx| {
             open(
                 window,
                 cx,
-                DialogOptions::new("wide", "Wide", 0.).content_width(30.),
-                |_, _| {
+                DialogOptions::new("Wide", 0.).content_width(30.),
+                |_, _, _| {
                     |content: DialogContent, _: &mut Window, _: &mut App| {
                         content.child(div().h(px(100.)))
                     }
@@ -1465,8 +2593,7 @@ mod tests {
         let screen_right = px(1920.) - SCREEN_MARGIN;
         let before = bounds_of(dialog, &mut owner);
         assert!(before.right() <= screen_right, "{before:?}");
-        owner.update(|_, cx| Theme::update(cx, |theme| theme.font_size = px(32.)));
-        owner.run_until_parked();
+        set_font_size(32., &mut owner);
         let after = bounds_of(dialog, &mut owner);
         assert!(after.size.width > before.size.width, "wider at 200%");
         assert!(
@@ -1487,25 +2614,7 @@ mod tests {
             origin: point(px(1500.), px(100.)),
             size: size(px(800.), px(800.)),
         };
-        let (right, _) = cx.update(|cx| {
-            gpui_kit::open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..WindowOptions::default()
-                },
-                cx,
-                |_, cx| {
-                    cx.new(|cx| Owner {
-                        focus: cx.focus_handle(),
-                        clicks: 0,
-                        keys: 0,
-                        presses: 0,
-                        scrolls: 0,
-                    })
-                },
-            )
-            .expect("a second owner")
-        });
+        let (right, _) = cx.update(|cx| second_owner(bounds, cx));
         let mut owner = VisualTestContext::from_window(right, &main);
         owner.run_until_parked();
         let (dialog, _) = open_test_dialog(&mut owner, true);

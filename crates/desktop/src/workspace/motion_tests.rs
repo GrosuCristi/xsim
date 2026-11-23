@@ -3,8 +3,7 @@
 //! opens, stops asking for frames after at most one more, and is gone on
 //! the first frame after it closes, by a button, Escape or Enter. The dock,
 //! the plot's side panels and the kit's menus have never animated; their
-//! tests keep it so. Toasts keep coming and going, and the run loader keeps
-//! turning.
+//! tests keep it so. The run loader keeps turning.
 //!
 //! The confirmations (unsaved changes, deleting a circuit) are the
 //! operating system's own dialogs and are not drawn by the kit.
@@ -15,8 +14,6 @@ use crate::test_support::{
     TestEnv, click, close, dialog, has_dialog, init, long_run_project, open, press,
     press_in_dialog, rc_project, wait_until,
 };
-use gpui_kit::component::WindowExt;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::{
     Background, Bounds, Hsla, Modifiers, Pixels, ScaledPixels, TestAppContext, VisualTestContext,
     px,
@@ -405,33 +402,6 @@ fn menus_open_and_close_at_once(cx: &mut TestAppContext) {
         settings.debug_bounds(DIALOG),
         Some(surface_before),
         "the settings stay as they were"
-    );
-    close(&mut window);
-}
-
-/// Toasts appear and leave without sliding, but keep their lifecycle: shown
-/// for their timeout, then gone.
-#[gpui_kit::test]
-fn toasts_still_hide_themselves_after_their_timeout(cx: &mut TestAppContext) {
-    init(cx);
-    let env = TestEnv::new();
-    let (_, mut window) = open(cx, &env, None);
-    let toasts =
-        |window: &mut VisualTestContext| window.update(|window, cx| window.notifications(cx).len());
-    window.update(|window, cx| crate::ui::toast(Notification::info("Saved"), window, cx));
-    window.run_until_parked();
-    assert_eq!(toasts(&mut window), 1, "the toast is shown");
-    let step = Duration::from_millis(250);
-    let mut shown = Duration::ZERO;
-    while toasts(&mut window) > 0 {
-        assert!(shown < Duration::from_secs(10), "the toast never left");
-        window.executor().advance_clock(step);
-        window.run_until_parked();
-        shown += step;
-    }
-    assert!(
-        shown >= Duration::from_secs(5),
-        "left after {shown:?}, before its timeout"
     );
     close(&mut window);
 }

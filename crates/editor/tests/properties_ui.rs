@@ -562,18 +562,28 @@ fn choosing_a_model_in_the_library_updates_the_part(cx: &mut TestAppContext) {
     assert_one_undo_step(&editor, &original, &mut cx);
 }
 
-/// Asserts that every control in `selectors` lies inside the dialog surface.
+/// Asserts that every control in `selectors` lies inside the dialog surface:
+/// across, inside the window's; down, inside the content, which may be
+/// taller than the window and scroll (D24), or inside the footer.
 fn assert_inside_dialog(selectors: &[&'static str], cx: &mut VisualTestContext) {
     let dialog = cx.debug_bounds("dialog-0").expect("an open dialog");
+    let parts: Vec<Bounds<Pixels>> = ["dialog-content", "dialog-footer"]
+        .into_iter()
+        .filter_map(|part| cx.debug_bounds(part))
+        .collect();
     for &selector in selectors {
         let bounds = cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("{selector} should be visible"));
         let inside = bounds.left() >= dialog.left()
             && bounds.right() <= dialog.right()
-            && bounds.top() >= dialog.top()
-            && bounds.bottom() <= dialog.bottom();
-        assert!(inside, "{selector} {bounds:?} leaves the dialog {dialog:?}");
+            && parts
+                .iter()
+                .any(|part| bounds.top() >= part.top() && bounds.bottom() <= part.bottom());
+        assert!(
+            inside,
+            "{selector} {bounds:?} leaves the dialog {dialog:?} ({parts:?})"
+        );
     }
 }
 
@@ -1432,9 +1442,9 @@ const PULSE_FIELDS: [&str; 8] = [
 /// D20 at 200%, with the dialog in a window of its own (D22) over the app's
 /// smallest window (900 × 560, see crates/desktop) or a 1200 × 900 one: the
 /// dialog keeps its form's width, stays on the 1920 × 1080 test screen and,
-/// being taller than the screen, scrolls its content and footer. The fields
-/// keep their width, nothing is cut off at the sides, and scrolling reaches
-/// the buttons.
+/// being taller than the screen, scrolls its content above the footer,
+/// whose buttons stay in view (D24). The fields keep their width and
+/// nothing is cut off at the sides.
 fn assert_source_dialog_fits(width: f32, height: f32, cx: &mut TestAppContext) {
     let font_size = 32.;
     let (editor, mut cx) = editor_window_sized(cx, pulse_source(), width, height);
@@ -1462,14 +1472,25 @@ fn assert_source_dialog_fits(width: f32, height: f32, cx: &mut TestAppContext) {
         ),
         "{case}: the form's width {dialog:?}"
     );
+    let content = shown("dialog-content", &mut cx);
+    let footer = shown("dialog-footer", &mut cx);
     assert!(
-        dialog.bottom() > viewport.height,
-        "{case}: taller than the screen, so it scrolls"
+        content.bottom() > footer.top(),
+        "{case}: taller than the screen, so it scrolls above the footer"
+    );
+    assert!(
+        within(
+            dialog,
+            Bounds::new(gpui_kit::point(px(0.), px(0.)), viewport)
+        ),
+        "{case}: {dialog:?} in {viewport:?}"
     );
     for button in ["properties-cancel", "properties-apply", "properties-ok"] {
         let bounds = shown(button, &mut cx);
         assert!(within(bounds, dialog), "{case}: {button} {bounds:?}");
+        assert!(within(bounds, footer), "{case}: {button} {bounds:?}");
     }
+    assert_fully_shown(&case, &mut cx);
     let hint = shown("properties-hint", &mut cx);
     assert!(within_x(hint, dialog), "{case}: {hint:?}");
     for kind in ["None", "PULSE", "SINE", "EXP", "PWL", "SFFM"] {
@@ -2439,52 +2460,46 @@ fn closing_the_editor_window_closes_its_dialogs(cx: &mut TestAppContext) {
     assert!(cx.windows().is_empty(), "every window closed");
 }
 
-/// D22: the window of each part kind opens at about the height its content
-/// measures, so it is centred over the editor's window from the start: the
-/// fit to the content that follows keeps the top edge.
+/// D24: the window of each part kind opens at the height its content
+/// measures, centred over the editor's window, and shows all of it with
+/// its buttons.
 #[gpui_kit::test]
 fn every_part_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
-    let names = [
-        "R1", "C1", "L1", "V1", "I1", "D1", "Q1", "Q2", "J1", "J2", "GND", "S1", "W1",
-    ];
-    let parts: Vec<(&str, Part)> = names
-        .into_iter()
-        .zip(PartKind::ALL)
-        .map(|(name, kind)| (name, Part::default_for(kind)))
-        .collect();
+    let parts = every_part();
     let (editor, mut cx) = editor_window(cx, schematic(&parts));
-    let owner = cx.update(|window, _| window.bounds());
     for (n, kind) in PartKind::ALL.into_iter().enumerate() {
-        open(&editor, n as Id + 1, &mut cx);
-        let (bounds, rem) = cx.update(|window, _| (window.bounds(), window.rem_size()));
-        let off = (bounds.center().y - owner.center().y).abs();
-        assert!(
-            off <= rem * 0.5,
-            "{kind:?}: {off:?} off centre, {} rem high",
-            bounds.size.height / rem
-        );
-        assert!(close(bounds.center().x, owner.center().x), "{kind:?}");
-        press("escape", &mut cx);
+        assert_opens_centred(&editor, n as Id + 1, &format!("{kind:?}"), &mut cx);
     }
 }
 
+/// One part of each kind, with its default parameters, ids from 1.
+fn every_part() -> Vec<(&'static str, Part)> {
+    let names = [
+        "R1", "C1", "L1", "V1", "I1", "D1", "Q1", "Q2", "J1", "J2", "GND", "S1", "W1",
+    ];
+    names
+        .into_iter()
+        .zip(PartKind::ALL)
+        .map(|(name, kind)| (name, Part::default_for(kind)))
+        .collect()
+}
+
 /// Opens part `id` from the editor's window and checks that the window is
-/// centred over it: down to `allowed`, across to a pixel.
+/// centred over it, to a pixel, and fully shown.
 fn assert_opens_centred(
     editor: &Entity<SchematicEditor>,
     id: Id,
-    allowed_rems: f32,
     case: &str,
     cx: &mut VisualTestContext,
 ) {
     let owner = editor_cx(cx).update(|window, _| window.bounds());
     open(editor, id, cx);
+    assert_fully_shown(case, cx);
     let (bounds, rem) = cx.update(|window, _| (window.bounds(), window.rem_size()));
     let off = (bounds.center().y - owner.center().y).abs();
     assert!(
-        off <= rem * allowed_rems,
-        "{case}: {} rem off centre, {} rem high",
-        off / rem,
+        off <= px(1.),
+        "{case}: {off:?} off centre, {} rem high",
         bounds.size.height / rem
     );
     assert!(close(bounds.center().x, owner.center().x), "{case}");
@@ -2492,17 +2507,268 @@ fn assert_opens_centred(
     assert!(dialog(cx).is_none(), "{case}: closed");
 }
 
-/// Within half a rem: what a window opening at its estimated height may be
-/// off centre.
-const ESTIMATED: f32 = 0.5;
+/// Checks the dialog with the keyboard against D24: inside the screen's
+/// work area, showing all of its content without scrolling unless that is
+/// taller than the work area, and its footer, with OK and Cancel (or
+/// Close), inside the window.
+fn assert_fully_shown(case: &str, cx: &mut VisualTestContext) {
+    follow(cx);
+    let handle = cx.window_handle();
+    let layout = cx
+        .cx
+        .update(|app| dialog_window::layout_of(handle, app))
+        .unwrap_or_else(|| panic!("{case}: no dialog that fits its content"));
+    if let Err(problem) = layout.check() {
+        panic!("{case}: {problem} ({layout:?})");
+    }
+    assert_not_cut_off(&layout, case, cx);
+    let viewport = layout.viewport;
+    let mut buttons = 0;
+    for button in ["properties-ok", "properties-cancel", "properties-close"] {
+        let Some(bounds) = cx.debug_bounds(button) else {
+            continue;
+        };
+        buttons += 1;
+        assert!(
+            bounds.top() >= px(0.)
+                && bounds.bottom() <= viewport.height + px(1.)
+                && bounds.right() <= viewport.width + px(1.),
+            "{case}: {button} {bounds:?} is outside the window's {viewport:?}"
+        );
+    }
+    assert!(buttons > 0, "{case}: no OK, Cancel or Close");
+}
 
-/// A sixteenth of a rem: a window opening at the height measured last time.
-const MEASURED: f32 = 0.0625;
+/// Checks, apart from the dialog's own measurements, that content which
+/// fits the room is not cut off: it lies between the title row and the
+/// footer, unscrolled.
+fn assert_not_cut_off(
+    layout: &dialog_window::DialogLayout,
+    case: &str,
+    cx: &mut VisualTestContext,
+) {
+    if layout.natural_height > layout.room.size.height {
+        return;
+    }
+    let content = cx.debug_bounds("dialog-content").expect("the content");
+    let bar = cx
+        .debug_bounds("dialog-title-bar")
+        .map_or(px(0.), |bar| bar.bottom());
+    let floor = cx
+        .debug_bounds("dialog-footer")
+        .map_or(layout.viewport.height, |footer| footer.top());
+    assert!(
+        content.top() >= bar - px(1.) && content.bottom() <= floor + px(1.),
+        "{case}: the content {content:?} is cut off between {bar:?} and {floor:?}"
+    );
+}
 
-/// D22: a source's window opens centred whatever its waveform: each type,
-/// PWL tables of several lengths, current sources and read-only projects.
-/// A source opened after one with another waveform is centred too, exactly
-/// once its own kind has been measured.
+/// The owner's screen at 200% display scaling: a 1920 × 1030 px work area
+/// (D24); and a smaller one.
+const WORK_AREAS: [(f32, f32); 2] = [(1920., 1030.), (1280., 680.)];
+
+/// Simulates a screen whose work area is `width` × `height` and makes the
+/// editor's window fill it, as when maximized.
+fn simulate_screen(width: f32, height: f32, cx: &mut VisualTestContext) {
+    let area = Bounds::new(Point::default(), size(px(width), px(height)));
+    let mut main = editor_cx(cx);
+    main.update(|window, cx| {
+        dialog_window::simulate_work_area(cx, Some(area));
+        window.resize(area.size);
+        window.bounds_changed(cx);
+    });
+    main.run_until_parked();
+}
+
+/// The model of `part`'s family with the longest description, which takes
+/// the most lines.
+fn longest_model(part: &Part) -> Option<String> {
+    fn longest<M>(entries: Vec<library::ModelEntry<M>>, admits: impl Fn(&M) -> bool) -> M {
+        entries
+            .into_iter()
+            .filter(|entry| admits(&entry.model))
+            .max_by_key(|entry| entry.description.len())
+            .expect("a model of the family")
+            .model
+    }
+    match part {
+        Part::Diode { .. } => Some(longest(library::diodes(), |_| true).name),
+        Part::Bjt { polarity, .. } => {
+            Some(longest(library::bjts(), |model| model.polarity == *polarity).name)
+        }
+        Part::Jfet { polarity, .. } => {
+            Some(longest(library::jfets(), |model| model.polarity == *polarity).name)
+        }
+        _ => None,
+    }
+}
+
+/// D24: on a screen whose work area is `width` × `height`, at `font_size`
+/// px (the UI scale), the window of every part opens fully shown, OK and
+/// Cancel without scrolling, and stays so through every change its form
+/// allows while open: each waveform type of a source, four more PWL points,
+/// and the library model with the longest description.
+fn assert_every_part_stays_fully_shown(
+    screen: (f32, f32),
+    font_size: f32,
+    cx: &mut TestAppContext,
+) {
+    assert_every_part_stays_fully_shown_in_a_frame(screen, font_size, None, cx);
+}
+
+/// [`assert_every_part_stays_fully_shown`], with windows that lose `frame`
+/// (width, height) of their size to the operating system's frame, as on
+/// Windows.
+fn assert_every_part_stays_fully_shown_in_a_frame(
+    (width, height): (f32, f32),
+    font_size: f32,
+    frame: Option<(f32, f32)>,
+    cx: &mut TestAppContext,
+) {
+    let parts = every_part();
+    let (editor, mut cx) = editor_window(cx, schematic(&parts));
+    simulate_screen(width, height, &mut cx);
+    set_font_size(font_size, &mut cx);
+    if let Some((frame_width, frame_height)) = frame {
+        cx.update(|_, cx| {
+            dialog_window::simulate_window_frame(cx, Some(size(px(frame_width), px(frame_height))))
+        });
+    }
+    for (n, (_, part)) in parts.iter().enumerate() {
+        let case = format!(
+            "{:?} at {font_size} px on {width} × {height}, frame {frame:?}",
+            part.kind()
+        );
+        open(&editor, n as Id + 1, &mut cx);
+        assert_fully_shown(&case, &mut cx);
+        if matches!(
+            part.kind(),
+            PartKind::VoltageSource | PartKind::CurrentSource
+        ) {
+            for kind in [
+                "waveform-PULSE",
+                "waveform-SINE",
+                "waveform-EXP",
+                "waveform-SFFM",
+                "waveform-None",
+                "waveform-PWL",
+            ] {
+                click(kind, &mut cx);
+                assert_fully_shown(&format!("{case}, {kind}"), &mut cx);
+            }
+            for point in 1..=4 {
+                click("pwl-add", &mut cx);
+                assert_fully_shown(&format!("{case}, {point} more points"), &mut cx);
+            }
+        }
+        if let Some(model) = longest_model(part) {
+            click("choose-model", &mut cx);
+            cx.simulate_input(&model);
+            cx.run_until_parked();
+            click("library-pick", &mut cx);
+            assert!(is_shown("model-name", &mut cx), "{case}: back in the form");
+            assert_fully_shown(&format!("{case}, {model}"), &mut cx);
+        }
+        press("escape", &mut cx);
+        assert!(dialog(&cx).is_none(), "{case}: closed");
+    }
+}
+
+/// D24 on the owner's screen at 200% display scaling, at 100% UI scale.
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_on_the_owners_screen(cx: &mut TestAppContext) {
+    assert_every_part_stays_fully_shown(WORK_AREAS[0], 16., cx);
+}
+
+/// D24 on the owner's screen at 200% display scaling, at 150% UI scale.
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_on_the_owners_screen_at_150_percent(
+    cx: &mut TestAppContext,
+) {
+    assert_every_part_stays_fully_shown(WORK_AREAS[0], 24., cx);
+}
+
+/// D24 on a smaller screen, at 100% UI scale.
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_on_a_small_screen(cx: &mut TestAppContext) {
+    assert_every_part_stays_fully_shown(WORK_AREAS[1], 16., cx);
+}
+
+/// D24 on a smaller screen, at 150% UI scale, where the tallest forms are
+/// taller than the screen and scroll above their buttons.
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_on_a_small_screen_at_150_percent(cx: &mut TestAppContext) {
+    assert_every_part_stays_fully_shown(WORK_AREAS[1], 24., cx);
+}
+
+/// D24 with Windows' frame at 200% display scaling (13 × 6.5 px taken from
+/// the size asked for), on the owner's screen at 100% UI scale and on a
+/// smaller one at 150%: the windows make room for it.
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_inside_the_windows_frame(cx: &mut TestAppContext) {
+    assert_every_part_stays_fully_shown_in_a_frame(WORK_AREAS[0], 16., Some((13., 6.5)), cx);
+}
+
+#[gpui_kit::test]
+fn every_part_window_stays_fully_shown_inside_the_windows_frame_on_a_small_screen(
+    cx: &mut TestAppContext,
+) {
+    assert_every_part_stays_fully_shown_in_a_frame(WORK_AREAS[1], 24., Some((13., 6.5)), cx);
+}
+
+/// D24 in a read-only project, whose forms cannot change, so their windows
+/// keep no room for other states: on both screens, at 100% and 150%.
+#[gpui_kit::test]
+fn every_read_only_part_window_is_fully_shown(cx: &mut TestAppContext) {
+    let parts = every_part();
+    let (editor, mut cx) = editor_window(cx, schematic(&parts));
+    editor.update(&mut cx, |editor, cx| editor.set_read_only(true, cx));
+    for (width, height) in WORK_AREAS {
+        simulate_screen(width, height, &mut cx);
+        for font_size in [16., 24.] {
+            set_font_size(font_size, &mut cx);
+            for (n, (_, part)) in parts.iter().enumerate() {
+                let case = format!(
+                    "read-only {:?} at {font_size} px on {width} × {height}",
+                    part.kind()
+                );
+                assert_opens_where_it_fits(&editor, n as Id + 1, &case, &mut cx);
+            }
+        }
+    }
+}
+
+/// Opens part `id` and checks that it is fully shown and, keeping no room
+/// for other states, centred over the editor's window but for what keeps
+/// it on the screen.
+fn assert_opens_where_it_fits(
+    editor: &Entity<SchematicEditor>,
+    id: Id,
+    case: &str,
+    cx: &mut VisualTestContext,
+) {
+    let owner = editor_cx(cx).update(|window, _| window.bounds());
+    open(editor, id, cx);
+    assert_fully_shown(case, cx);
+    let handle = cx.window_handle();
+    let layout = cx
+        .cx
+        .update(|app| dialog_window::layout_of(handle, app))
+        .expect("a fitted dialog");
+    let (bounds, room) = (layout.bounds, layout.room);
+    let centred = (owner.center().y - bounds.size.height / 2.)
+        .min(room.bottom() - bounds.size.height)
+        .max(room.top());
+    assert!(
+        (bounds.top() - centred).abs() <= px(1.),
+        "{case}: {bounds:?} not centred over {owner:?} in {room:?}"
+    );
+    press("escape", cx);
+}
+
+/// D24: a source's window opens centred whatever its waveform: each type,
+/// PWL tables of several lengths, current sources and read-only projects;
+/// the same source opened again opens the same way.
 #[gpui_kit::test]
 fn every_source_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
     let pulse = Waveform::Pulse {
@@ -2571,23 +2837,17 @@ fn every_source_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
     let refs: Vec<(&str, Part)> = named.iter().map(|(n, p)| (n.as_str(), p.clone())).collect();
     let (editor, mut cx) = editor_window(cx, schematic(&refs));
     for (n, part) in parts.iter().enumerate() {
-        assert_opens_centred(
-            &editor,
-            n as Id + 1,
-            ESTIMATED,
-            &format!("{part:?}"),
-            &mut cx,
-        );
+        assert_opens_centred(&editor, n as Id + 1, &format!("{part:?}"), &mut cx);
     }
     // The DC source after the others, and the pulse after it.
     for id in [1, 2] {
         let case = format!("again: {:?}", parts[id as usize - 1]);
-        assert_opens_centred(&editor, id, MEASURED, &case, &mut cx);
+        assert_opens_centred(&editor, id, &case, &mut cx);
     }
     editor.update(&mut cx, |editor, cx| editor.set_read_only(true, cx));
     for id in [1, 2, 8] {
         let case = format!("read-only: {:?}", parts[id as usize - 1]);
-        assert_opens_centred(&editor, id, ESTIMATED, &case, &mut cx);
+        assert_opens_centred(&editor, id, &case, &mut cx);
     }
 }
 
@@ -2651,18 +2911,12 @@ fn every_model_window_opens_centred_over_the_editor(cx: &mut TestAppContext) {
     let (editor, mut cx) = editor_window(cx, schematic(&refs));
     let models = parts.len() - 4;
     for (n, part) in parts.iter().take(parts.len() - 1).enumerate() {
-        assert_opens_centred(
-            &editor,
-            n as Id + 1,
-            ESTIMATED,
-            &format!("{part:?}"),
-            &mut cx,
-        );
+        assert_opens_centred(&editor, n as Id + 1, &format!("{part:?}"), &mut cx);
     }
     editor.update(&mut cx, |editor, cx| editor.set_read_only(true, cx));
     for n in [0, models, models + 1] {
         let case = format!("read-only: {:?}", parts[n]);
-        assert_opens_centred(&editor, n as Id + 1, ESTIMATED, &case, &mut cx);
+        assert_opens_centred(&editor, n as Id + 1, &case, &mut cx);
     }
 }
 

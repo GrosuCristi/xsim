@@ -372,9 +372,12 @@ fn circuits_are_renamed_by_double_click_and_deleted_after_confirmation(cx: &mut 
 
     env.prompts.delete.borrow_mut().push_back(false);
     workspace.update_in(&mut window, |w, window, cx| w.delete_circuit(0, window, cx));
+    // D25: the answer applies once the question's task has run.
+    window.run_until_parked();
     assert_eq!(workspace.read_with(&window, |w, _| w.tabs.len()), 2);
     env.prompts.delete.borrow_mut().push_back(true);
     workspace.update_in(&mut window, |w, window, cx| w.delete_circuit(0, window, cx));
+    window.run_until_parked();
     workspace.read_with(&window, |w, _| {
         assert_eq!(w.tabs.len(), 1);
         assert_eq!(w.doc.project.circuits[0].name, "Circuit 2");
@@ -647,12 +650,18 @@ fn closing_the_window_asks_about_unsaved_changes(cx: &mut TestAppContext) {
         .unsaved
         .borrow_mut()
         .push_back(UnsavedChoice::Cancel);
-    assert!(!window.simulate_close(), "cancel keeps the window open");
+    // D25: the window stays open while the question is asked, and closes
+    // itself after Don't save.
+    assert!(!window.simulate_close(), "the window waits for the answer");
+    window.run_until_parked();
+    assert!(!window.windows().is_empty(), "cancel keeps the window open");
     env.prompts
         .unsaved
         .borrow_mut()
         .push_back(UnsavedChoice::Discard);
-    assert!(window.simulate_close(), "discard closes it");
+    assert!(!window.simulate_close(), "the window waits for the answer");
+    window.run_until_parked();
+    assert!(window.windows().is_empty(), "discard closes it");
     let sessions = fs::read_dir(env.data_dir().join("recovery"))
         .map(|dir| dir.count())
         .unwrap_or(0);
@@ -2120,12 +2129,12 @@ fn closing_the_main_window_over_a_dialog_closes_both(cx: &mut TestAppContext) {
         .unsaved
         .borrow_mut()
         .push_back(UnsavedChoice::Discard);
+    // D25: the main window closes itself once Don't save is answered.
     assert!(
-        window.simulate_close(),
-        "Discard lets the main window close"
+        !window.simulate_close(),
+        "the main window waits for the answer"
     );
-    // The platform closes it then.
-    close(&mut window);
+    window.run_until_parked();
     assert!(settings.windows().is_empty(), "the dialog closed with it");
 }
 

@@ -6,10 +6,7 @@ pub mod split;
 
 use crate::actions::PRESSABLE_CONTEXT;
 use crate::diagnostics::Severity;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Sizable, WindowExt, button::Button, h_flex,
-    notification::Notification, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, button::Button, h_flex, v_flex};
 use gpui_kit::{prelude::*, *};
 
 /// Wraps `element` so headless tests can find it with
@@ -22,13 +19,6 @@ pub fn testable(selector: &'static str, element: impl IntoElement) -> Div {
 /// of confirming the dialog it sits in.
 pub fn pressable(button: Button) -> Button {
     button.key_context(PRESSABLE_CONTEXT)
-}
-
-/// Shows `note` as a toast. Deferred, so it also works while the window
-/// is still being built.
-pub fn toast(note: impl Into<Notification>, window: &mut Window, cx: &mut App) {
-    let note = note.into();
-    window.defer(cx, move |window, cx| window.push_notification(note, cx));
 }
 
 /// A small round status dot.

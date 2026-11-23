@@ -6,8 +6,8 @@ use super::transient::SOURCE_FORM_WIDTH;
 use super::view::PropertiesView;
 use super::waveform::WaveKind;
 use crate::SchematicEditor;
-use crate::dialog_window::{self, DialogContent, DialogOptions};
-use crate::library_browser::{self, pressable};
+use crate::dialog_window::{self, Build, DialogContent, DialogOptions};
+use crate::library_browser::{self, LibraryItem, pressable};
 use gpui_kit::component::{
     ActiveTheme as _,
     button::{Button, ButtonVariants as _},
@@ -18,81 +18,125 @@ use gpui_kit::{
     ParentElement as _, Styled as _, Window, div,
 };
 use xsim_project::{Id, Part, PartKind};
-use xsim_spice_engine::{Source, Waveform};
+use xsim_spice_engine::library;
 
-/// The window for `part`. A source's compact form gets exactly its width
-/// (D20); other parts share a fixed width, in rems so it follows the UI
-/// scale.
-///
-/// The window opens at the height its form is expected to measure, so that
-/// it opens centred over the editor (D22): once open it can only grow or
-/// shrink downward. That height depends on more than the part's kind (see
-/// [`variant`]), and each variant is a dialog kind of its own, so a later
-/// opening of the same variant starts at the height measured this time.
-fn options(part: &Part, read_only: bool, title: String) -> DialogOptions {
-    let kind = part.kind();
-    let access = if read_only { "-read-only" } else { "" };
-    let id = format!("properties-{kind:?}{}{access}", variant(part));
+/// The window for a part of `kind`. A source's compact form gets exactly
+/// its width (D20); other parts share a fixed width, in rems so it follows
+/// the UI scale. It keeps room for `reserved` states of the form (D24, see
+/// [`Reserved`]).
+fn options(kind: PartKind, reserved: usize, title: String) -> DialogOptions {
     let options = match kind {
         PartKind::VoltageSource | PartKind::CurrentSource => {
-            DialogOptions::new(id, title, 0.).content_width(SOURCE_FORM_WIDTH)
+            DialogOptions::new(title, 0.).content_width(SOURCE_FORM_WIDTH)
         }
-        PartKind::Ground => DialogOptions::new(id, title, 26.),
-        _ => DialogOptions::new(id, title, 32.5),
+        PartKind::Ground => DialogOptions::new(title, 26.),
+        _ => DialogOptions::new(title, 32.5),
     };
-    options.estimated_height(estimated_height(part, read_only))
+    options.reserve_states(reserved)
 }
 
-/// What sets the height of `part`'s form beyond its kind: a source's
-/// waveform type and number of PWL points, and the model of a
-/// semiconductor, whose description takes one line or two.
-fn variant(part: &Part) -> String {
+/// A state the form can change to while the dialog is open, which makes it
+/// taller: the window keeps room on the screen for it (D24). The dialog's
+/// window opens where the tallest of them fits below its top, nearer the
+/// top of the screen than centred if need be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Reserved {
+    /// A source showing another waveform type, as it is once chosen.
+    Wave(WaveKind),
+    /// A source's PWL table with [`RESERVED_PWL_POINTS`] points more than
+    /// it shows once chosen.
+    MorePwlPoints,
+    /// A semiconductor showing the model of its family whose description
+    /// is the longest, as when it is picked from the library.
+    LongestModel,
+}
+
+/// How many points a PWL table can gain while the dialog is open and still
+/// be shown whole. The table can grow without end, so the window cannot
+/// keep room for all of it; with more points the form scrolls above the
+/// footer.
+const RESERVED_PWL_POINTS: usize = 4;
+
+/// The states the form of `part` can reach: none in a read-only project,
+/// whose form does not change.
+fn reserved_states(part: &Part, read_only: bool) -> Vec<Reserved> {
+    if read_only {
+        return Vec::new();
+    }
     match part {
         Part::VoltageSource { source } | Part::CurrentSource { source } => {
-            let wave = WaveKind::of(source.waveform.as_ref());
-            match &source.waveform {
-                Some(Waveform::Pwl { points, .. }) => format!("-{wave:?}-{}", points.len()),
-                _ => format!("-{wave:?}"),
+            let current = WaveKind::of(source.waveform.as_ref());
+            WaveKind::ALL
+                .into_iter()
+                .filter(|kind| *kind != current)
+                .map(Reserved::Wave)
+                .chain([Reserved::MorePwlPoints])
+                .collect()
+        }
+        Part::Diode { .. } | Part::Bjt { .. } | Part::Jfet { .. } => vec![Reserved::LongestModel],
+        _ => Vec::new(),
+    }
+}
+
+/// The library model of `part`'s family whose description is the longest,
+/// as a library item.
+fn longest_model(part: &Part) -> Option<LibraryItem> {
+    fn longest<M>(
+        entries: Vec<library::ModelEntry<M>>,
+        admits: impl Fn(&M) -> bool,
+    ) -> Option<library::ModelEntry<M>> {
+        entries
+            .into_iter()
+            .filter(|entry| admits(&entry.model))
+            .max_by_key(|entry| entry.description.len())
+    }
+    let part = match part {
+        Part::Diode { .. } => Part::Diode {
+            model: longest(library::diodes(), |_| true)?.model.name,
+        },
+        Part::Bjt { polarity, .. } => Part::Bjt {
+            polarity: *polarity,
+            model: longest(library::bjts(), |model| model.polarity == *polarity)?
+                .model
+                .name,
+        },
+        Part::Jfet { polarity, .. } => Part::Jfet {
+            polarity: *polarity,
+            model: longest(library::jfets(), |model| model.polarity == *polarity)?
+                .model
+                .name,
+        },
+        _ => return None,
+    };
+    LibraryItem::model_of(&part)
+}
+
+/// Puts the form of `part` in `state`. Only in the hidden window that
+/// measures the dialog's content: whatever it focuses stays there.
+fn enter(
+    state: Reserved,
+    part: &Part,
+    view: &Entity<PropertiesView>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let model = (state == Reserved::LongestModel)
+        .then(|| longest_model(part))
+        .flatten();
+    view.update(cx, |view, cx| match state {
+        Reserved::Wave(kind) => view.set_wave_kind(kind, window, cx),
+        Reserved::MorePwlPoints => {
+            view.set_wave_kind(WaveKind::Pwl, window, cx);
+            for _ in 0..RESERVED_PWL_POINTS {
+                view.add_pwl_row(window, cx);
             }
         }
-        Part::Diode { model } | Part::Bjt { model, .. } | Part::Jfet { model, .. } => {
-            format!("-{model}")
+        Reserved::LongestModel => {
+            if let Some(model) = &model {
+                view.set_model(model, cx);
+            }
         }
-        _ => String::new(),
-    }
-}
-
-/// The height in rems the window opens at, before its content has been
-/// measured: what the form of `part` measures at 100% UI scale.
-fn estimated_height(part: &Part, read_only: bool) -> f32 {
-    // A read-only footer has a single button, so its hint takes one line.
-    let footer = if read_only { -0.4375 } else { 0. };
-    let form = match part {
-        Part::Resistor { .. } => 20.75,
-        Part::Capacitor { .. } | Part::Inductor { .. } => 24.75,
-        Part::VoltageSource { source } | Part::CurrentSource { source } => source_height(source),
-        // The narrower window wraps the ground's hint differently.
-        Part::Ground if read_only => return 17.125,
-        Part::Ground => 20.,
-        // Between a model description of one line and one of two.
-        Part::Diode { .. } | Part::Bjt { .. } => 23.25,
-        Part::Jfet { .. } => 22.5,
-        Part::VoltageSwitch { .. } => 29.25,
-        Part::CurrentSwitch { .. } => 38.75,
-    };
-    form + footer
-}
-
-/// The height in rems of a source's form: its waveform's fields and
-/// preview, or its PWL table, three rems per point.
-fn source_height(source: &Source) -> f32 {
-    match &source.waveform {
-        None => 26.625,
-        Some(Waveform::Pulse { .. } | Waveform::Sine { .. }) => 44.75,
-        Some(Waveform::Exp { .. } | Waveform::Sffm { .. }) => 42.75,
-        Some(Waveform::Pwl { points, .. }) if points.len() <= 1 => 35.5,
-        Some(Waveform::Pwl { points, .. }) => 31.75 + 3. * points.len() as f32,
-    }
+    });
 }
 
 /// Opens the dialog for component `id` over `window`; does nothing if it
@@ -113,12 +157,27 @@ pub(super) fn open(editor: Entity<SchematicEditor>, id: Id, window: &mut Window,
         component.name,
         component.part.kind().label()
     );
-    let options = options(&component.part, read_only, title);
-    dialog_window::open(window, cx, options, move |window, cx| {
+    let reserved = reserved_states(&component.part, read_only);
+    let options = options(component.part.kind(), reserved.len(), title);
+    // Built for the hidden window that measures the form, for each reserved
+    // state, then for the dialog's window (D24). None of it reaches the
+    // editor until Apply or OK.
+    dialog_window::open(window, cx, options, move |build, window, cx| {
         let view = cx.new(|cx| {
-            PropertiesView::new(editor, &component, taken, sources, read_only, window, cx)
+            PropertiesView::new(
+                editor.clone(),
+                &component,
+                taken.clone(),
+                sources.clone(),
+                read_only,
+                window,
+                cx,
+            )
         });
-        focus_initial_field(&view, window, cx);
+        match build {
+            Build::Shown => focus_initial_field(&view, window, cx),
+            Build::Reserved(state) => enter(reserved[state], &component.part, &view, window, cx),
+        }
         move |content: DialogContent, _: &mut Window, cx: &mut App| {
             let confirm = view.clone();
             content

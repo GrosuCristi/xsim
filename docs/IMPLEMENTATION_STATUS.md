@@ -73,7 +73,7 @@ Results on 2026-11-23 (Windows 11 x64, Rust 1.99.0):
 
 - Format check and clippy: clean.
 - Release build: succeeds.
-- Tests: **1506 passed, 0 failed, 4 ignored**. The ignored ones are:
+- Tests: **1546 passed, 0 failed, 4 ignored**. The ignored ones are:
   - an accuracy table that is only meaningful in a release build (engine);
   - a helper that runs inside child processes (project);
   - the test that regenerates the example file (project);
